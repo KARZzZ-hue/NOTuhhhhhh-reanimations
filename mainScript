@@ -553,6 +553,511 @@ local function playIntro()
 end
 
 ----------------------------------------------------------------
+-- Backgrounds: ASCII plasma (default), none, a .txt ascii art file, or an image
+--   <data folder>/Content/backgrounds/   (also accepted: "background", "background grounds")
+----------------------------------------------------------------
+local BG_PLASMA, BG_NONE = "ASCII Plasma (default)", "None"
+local BG_FOLDER_KEYS = {backgrounds = true, background = true, backgroundgrounds = true}
+local BG_IMAGE_EXT = {png = true, jpg = true, jpeg = true, webp = true, bmp = true}
+local getAsset = getcustomasset or getsynasset
+local BG_SAVE_FILE = DATA_FOLDER .. "/NOTbackground.txt"
+
+local BG = {current = BG_PLASMA, byName = {}, names = {BG_PLASMA, BG_NONE}, apply = nil}
+
+-- remember the last choice
+do
+	local ok, saved = pcall(function()
+		if isfile(BG_SAVE_FILE) then return readfile(BG_SAVE_FILE) end
+		return nil
+	end)
+	if ok and type(saved) == "string" then
+		saved = saved:gsub("[\r\n]+", "")
+		if #saved > 0 then BG.current = saved end
+	end
+end
+
+local function bgNorm(s)
+	return (s:lower():gsub("[%s_%-]", ""))
+end
+
+-- lists the backgrounds. With create = true the folder is made when it doesn't exist yet.
+function BG.scan(create)
+	local base = DATA_FOLDER .. "/Content"
+	local names, byName = {BG_PLASMA, BG_NONE}, {}
+	local foundFolder = false
+	local okL, list = pcall(listfiles, base)
+	if okL and type(list) == "table" then
+		for _, p in ipairs(list) do
+			local n = p:match("([^/\\]+)$")
+			local okD, isD = pcall(isfolder, p)
+			if n and okD and isD and BG_FOLDER_KEYS[bgNorm(n)] then
+				foundFolder = true
+				local okF, files = pcall(listfiles, p)
+				if okF and type(files) == "table" then
+					table.sort(files)
+					for _, f in ipairs(files) do
+						local fname = f:match("([^/\\]+)$")
+						local ext = fname and fname:match("%.([^%.]+)$")
+						ext = ext and ext:lower()
+						local kind = nil
+						if ext == "txt" then
+							kind = "text"
+						elseif ext and BG_IMAGE_EXT[ext] then
+							kind = "image"
+						end
+						local okFile, isFile = pcall(isfile, f)
+						if kind and okFile and isFile and not byName[fname] then
+							byName[fname] = {kind = kind, path = f}
+							table.insert(names, fname)
+						end
+					end
+				end
+			end
+		end
+	end
+	if create and not foundFolder then
+		pcall(makefolder, DATA_FOLDER)
+		pcall(makefolder, base)
+		pcall(makefolder, base .. "/backgrounds")
+	end
+	BG.names, BG.byName = names, byName
+	return names
+end
+
+function BG.set(name)
+	BG.current = name
+	pcall(writefile, BG_SAVE_FILE, name)
+	if BG.apply then BG.apply() end
+end
+
+-- The patched Uhhhhhh source calls this right after its "UI Theme" dropdown,
+-- so the "Background" dropdown shows up directly under the themes.
+_G.NOTCreateBackgroundUI = function(UI, MainPage)
+	local names = BG.scan(true)
+	local index = table.find(names, BG.current) or 1
+	local select = UI.CreateDropdown(MainPage, "Background", names, index)
+	select.Changed:Connect(function(val)
+		if names[val] then BG.set(names[val]) end
+	end)
+	if BG.apply then BG.apply() end
+end
+
+----------------------------------------------------------------
+-- Config page: "Moveset configs" (trail) and "Dancing configs" (ghost fills)
+----------------------------------------------------------------
+local LocalPlayer = Players.LocalPlayer
+
+local PART_ALIASES = {
+	["Torso"] = {"Torso", "UpperTorso"},
+	["Head"] = {"Head"},
+	["Left Arm"] = {"Left Arm", "LeftUpperArm", "LeftHand"},
+	["Right Arm"] = {"Right Arm", "RightUpperArm", "RightHand"},
+	["Left Leg"] = {"Left Leg", "LeftUpperLeg", "LeftFoot"},
+	["Right Leg"] = {"Right Leg", "RightUpperLeg", "RightFoot"},
+	["Root"] = {"HumanoidRootPart"},
+}
+local LOCATION_GROUPS = {
+	["Both Arms"] = {"Left Arm", "Right Arm"},
+	["Both Legs"] = {"Left Leg", "Right Leg"},
+	["All Limbs"] = {"Left Arm", "Right Arm", "Left Leg", "Right Leg"},
+	["Whole Body"] = {"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"},
+}
+local TRAIL_LOCATIONS = {
+	"Torso", "Head", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Root",
+	"Both Arms", "Both Legs", "All Limbs", "Whole Body",
+}
+local GHOST_MATERIALS = {"Neon", "ForceField", "SmoothPlastic", "Glass"}
+
+local function ensureDefaults(tbl, defaults)
+	if type(tbl) ~= "table" then tbl = {} end
+	for k, v in pairs(defaults) do
+		if tbl[k] == nil then tbl[k] = v end
+	end
+	return tbl
+end
+
+-- the models that make up the player's body (the script's own character, the original one, the camera's)
+local function bodyModels()
+	local list = {}
+	local function add(m)
+		if m and m:IsA("Model") and not table.find(list, m) then
+			table.insert(list, m)
+		end
+	end
+	add(LocalPlayer.Character)
+	add(workspace:FindFirstChild(LocalPlayer.Name))
+	local cam = workspace.CurrentCamera
+	if cam and cam.CameraSubject and cam.CameraSubject:IsA("Humanoid") then
+		add(cam.CameraSubject.Parent)
+	end
+	return list
+end
+
+local function resolveTrailParts(location)
+	local logical = LOCATION_GROUPS[location] or {location}
+	local models = bodyModels()
+	local parts = {}
+	for _, lname in ipairs(logical) do
+		local aliases = PART_ALIASES[lname]
+		if aliases then
+			local found = nil
+			for _, m in ipairs(models) do
+				for _, a in ipairs(aliases) do
+					local p = m:FindFirstChild(a)
+					if p and p:IsA("BasePart") then
+						found = p
+						break
+					end
+				end
+				if found then break end
+			end
+			if found then table.insert(parts, found) end
+		end
+	end
+	return parts
+end
+
+-- all visible parts of the avatar (also accessories), used for the ghost fills
+local function visibleBodyParts()
+	local out, seen = {}, {}
+	for _, m in ipairs(bodyModels()) do
+		for _, d in ipairs(m:GetDescendants()) do
+			if d:IsA("BasePart") and not seen[d] and d.Name ~= "HumanoidRootPart"
+				and d.Transparency < 0.95 and d.Size.Magnitude > 0.2 then
+				seen[d] = true
+				out[#out + 1] = d
+			end
+		end
+	end
+	return out
+end
+
+local function rainbowSequence(t)
+	local kp = table.create(5)
+	for i = 0, 4 do
+		kp[i + 1] = ColorSequenceKeypoint.new(i / 4, Color3.fromHSV((t * 0.3 + i * 0.2) % 1, 1, 1))
+	end
+	return ColorSequence.new(kp)
+end
+
+local function buildConfigUI(UI, MainPage, SaveData, UISound)
+	local T = ensureDefaults(SaveData.NOTTrail, {
+		Enabled = false, Location = "Torso", Orientation = "Vertical", Rainbow = false,
+		R = 255, G = 255, B = 255, Lifetime = 0.6, Width = 1.5,
+		Transparency = 0.2, LightEmission = 0.8, FaceCamera = false,
+	})
+	SaveData.NOTTrail = T
+	local D = ensureDefaults(SaveData.NOTDance, {
+		Enabled = false, Trigger = "Dancing (auto)", Interval = 0.2, Fade = 0.8,
+		StartTransparency = 0.4, MaxGhosts = 12, Expand = 0, Material = "Neon",
+		Rainbow = false, R = 255, G = 255, B = 255,
+	})
+	SaveData.NOTDance = D
+
+	local function round2(v) return math.floor(v * 100 + 0.5) / 100 end
+	local function indexOf(list, v) return table.find(list, v) or 1 end
+
+	----------------------------------------------------------------
+	-- pages
+	----------------------------------------------------------------
+	local function makePage()
+		local p = UI.CreatePage()
+		p.Visible = false
+		p.Active = true
+		p.ZIndex = 20
+		return p
+	end
+	local configPage, movesetPage, dancePage = makePage(), makePage(), makePage()
+	local pages = {configPage, movesetPage, dancePage}
+	local function showPage(page)
+		for _, p in ipairs(pages) do
+			p.Visible = (p == page)
+		end
+	end
+	local function backButton(page, target)
+		local b = UI.CreateButton(page, " &lt; Back", 20)
+		b.Activated:Connect(function() showPage(target) end)
+	end
+
+	-- the "Config" button on the main page
+	local cfgBtn = UI.CreateButton(MainPage, "Config", 20)
+	local cfgContainer = cfgBtn.Parent
+	cfgBtn.Activated:Connect(function() showPage(configPage) end)
+
+	-- config page
+	backButton(configPage, nil)
+	UI.CreateSeparator(configPage)
+	UI.CreateButton(configPage, "Moveset configs", 20).Activated:Connect(function() showPage(movesetPage) end)
+	UI.CreateButton(configPage, "Dancing configs", 20).Activated:Connect(function() showPage(dancePage) end)
+
+	----------------------------------------------------------------
+	-- moveset configs: trail
+	----------------------------------------------------------------
+	local trailState = {objs = {}, parts = {}, dirty = true}
+	local function dirty() trailState.dirty = true end
+
+	backButton(movesetPage, configPage)
+	UI.CreateSeparator(movesetPage)
+	UI.CreateText(movesetPage, "Trail: a ribbon that follows your reanimated body wherever you put it.", 13, Enum.TextXAlignment.Left)
+	UI.CreateSwitch(movesetPage, "Trail", T.Enabled).Changed:Connect(function(v) T.Enabled = v dirty() end)
+	UI.CreateDropdown(movesetPage, "Location", TRAIL_LOCATIONS, indexOf(TRAIL_LOCATIONS, T.Location)).Changed:Connect(function(i)
+		T.Location = TRAIL_LOCATIONS[i] or "Torso"
+		dirty()
+	end)
+	local ORIENTATIONS = {"Vertical", "Horizontal"}
+	UI.CreateDropdown(movesetPage, "Direction", ORIENTATIONS, indexOf(ORIENTATIONS, T.Orientation)).Changed:Connect(function(i)
+		T.Orientation = ORIENTATIONS[i] or "Vertical"
+		dirty()
+	end)
+	UI.CreateSeparator(movesetPage)
+	UI.CreateSwitch(movesetPage, "Rainbow", T.Rainbow).Changed:Connect(function(v) T.Rainbow = v dirty() end)
+	UI.CreateSlider(movesetPage, "Red", T.R, 0, 255, 1).Changed:Connect(function(v) T.R = math.floor(v + 0.5) dirty() end)
+	UI.CreateSlider(movesetPage, "Green", T.G, 0, 255, 1).Changed:Connect(function(v) T.G = math.floor(v + 0.5) dirty() end)
+	UI.CreateSlider(movesetPage, "Blue", T.B, 0, 255, 1).Changed:Connect(function(v) T.B = math.floor(v + 0.5) dirty() end)
+	UI.CreateSeparator(movesetPage)
+	UI.CreateSlider(movesetPage, "Lifetime (sec)", T.Lifetime, 0.1, 3, 0.1).Changed:Connect(function(v) T.Lifetime = round2(v) dirty() end)
+	UI.CreateSlider(movesetPage, "Width", T.Width, 0.2, 6, 0.1).Changed:Connect(function(v) T.Width = round2(v) dirty() end)
+	UI.CreateSlider(movesetPage, "Transparency", T.Transparency, 0, 1, 0.05).Changed:Connect(function(v) T.Transparency = round2(v) dirty() end)
+	UI.CreateSlider(movesetPage, "Glow", T.LightEmission, 0, 1, 0.05).Changed:Connect(function(v) T.LightEmission = round2(v) dirty() end)
+	UI.CreateSwitch(movesetPage, "Face camera", T.FaceCamera).Changed:Connect(function(v) T.FaceCamera = v dirty() end)
+
+	local function clearTrails()
+		for _, o in ipairs(trailState.objs) do
+			pcall(function()
+				o.trail:Destroy()
+				o.a0:Destroy()
+				o.a1:Destroy()
+			end)
+		end
+		trailState.objs = {}
+		trailState.parts = {}
+	end
+
+	local function buildTrails(parts)
+		clearTrails()
+		local half = T.Width / 2
+		for _, part in ipairs(parts) do
+			local a0 = Instance.new("Attachment")
+			local a1 = Instance.new("Attachment")
+			a0.Name, a1.Name = "NOTTrailA0", "NOTTrailA1"
+			if T.Orientation == "Horizontal" then
+				a0.Position, a1.Position = Vector3.new(half, 0, 0), Vector3.new(-half, 0, 0)
+			else
+				a0.Position, a1.Position = Vector3.new(0, half, 0), Vector3.new(0, -half, 0)
+			end
+			a0.Parent, a1.Parent = part, part
+			local tr = Instance.new("Trail")
+			tr.Name = "NOTTrail"
+			tr.Attachment0, tr.Attachment1 = a0, a1
+			tr.Lifetime = T.Lifetime
+			tr.LightEmission = T.LightEmission
+			tr.FaceCamera = T.FaceCamera
+			tr.MinLength = 0.05
+			tr.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, T.Transparency),
+				NumberSequenceKeypoint.new(1, 1),
+			})
+			tr.Color = ColorSequence.new(Color3.fromRGB(T.R, T.G, T.B))
+			tr.Parent = part
+			table.insert(trailState.objs, {trail = tr, a0 = a0, a1 = a1})
+		end
+		trailState.parts = parts
+		trailState.dirty = false
+	end
+
+	----------------------------------------------------------------
+	-- dancing configs: ghost fills
+	----------------------------------------------------------------
+	local TRIGGERS = {"Dancing (auto)", "Always"}
+	backButton(dancePage, configPage)
+	UI.CreateSeparator(dancePage)
+	UI.CreateText(dancePage, "Ghosts: while you dance, solid copies of your avatar stay where they spawned and fade out. Off until you turn it on.", 13, Enum.TextXAlignment.Left)
+	UI.CreateSwitch(dancePage, "Dancing ghosts", D.Enabled).Changed:Connect(function(v) D.Enabled = v end)
+	UI.CreateDropdown(dancePage, "Active when", TRIGGERS, indexOf(TRIGGERS, D.Trigger)).Changed:Connect(function(i)
+		D.Trigger = TRIGGERS[i] or TRIGGERS[1]
+	end)
+	UI.CreateText(dancePage, "Dancing (auto) = dance music or an emote is playing. Pick Always to test it or for dances without music.", 11, Enum.TextXAlignment.Left)
+	UI.CreateSeparator(dancePage)
+	UI.CreateSlider(dancePage, "Spawn every (sec)", D.Interval, 0.05, 2, 0.05).Changed:Connect(function(v) D.Interval = math.max(0.05, round2(v)) end)
+	UI.CreateSlider(dancePage, "Fade out (sec)", D.Fade, 0.1, 3, 0.1).Changed:Connect(function(v) D.Fade = math.max(0.1, round2(v)) end)
+	UI.CreateSlider(dancePage, "Start transparency", D.StartTransparency, 0, 0.9, 0.05).Changed:Connect(function(v) D.StartTransparency = round2(v) end)
+	UI.CreateSlider(dancePage, "Max ghosts", D.MaxGhosts, 1, 40, 1).Changed:Connect(function(v) D.MaxGhosts = math.floor(v + 0.5) end)
+	UI.CreateSlider(dancePage, "Expand while fading", D.Expand, 0, 1, 0.05).Changed:Connect(function(v) D.Expand = round2(v) end)
+	UI.CreateDropdown(dancePage, "Material", GHOST_MATERIALS, indexOf(GHOST_MATERIALS, D.Material)).Changed:Connect(function(i)
+		D.Material = GHOST_MATERIALS[i] or "Neon"
+	end)
+	UI.CreateSeparator(dancePage)
+	UI.CreateSwitch(dancePage, "Rainbow", D.Rainbow).Changed:Connect(function(v) D.Rainbow = v end)
+	UI.CreateSlider(dancePage, "Red", D.R, 0, 255, 1).Changed:Connect(function(v) D.R = math.floor(v + 0.5) end)
+	UI.CreateSlider(dancePage, "Green", D.G, 0, 255, 1).Changed:Connect(function(v) D.G = math.floor(v + 0.5) end)
+	UI.CreateSlider(dancePage, "Blue", D.B, 0, 255, 1).Changed:Connect(function(v) D.B = math.floor(v + 0.5) end)
+
+	local ghosts = {}
+	local function clearGhosts()
+		for _, g in ipairs(ghosts) do
+			pcall(function() g:Destroy() end)
+		end
+		ghosts = {}
+	end
+
+	local function isDancing()
+		if D.Trigger == "Always" then return true end
+		if UISound and UISound.DanceMusic and UISound.DanceMusic.IsPlaying then return true end
+		for _, m in ipairs(bodyModels()) do
+			local hum = m:FindFirstChildOfClass("Humanoid")
+			local animator = hum and hum:FindFirstChildOfClass("Animator")
+			if animator then
+				for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+					local pr = track.Priority.Name
+					if pr == "Action" or pr == "Action2" or pr == "Action3" or pr == "Action4" then
+						return true
+					end
+				end
+			end
+		end
+		return false
+	end
+
+	-- a plain solid copy of one body part (keeps meshes, drops textures, faces, welds, scripts...)
+	local function ghostOf(part)
+		local okC, c = pcall(function() return part:Clone() end)
+		if not okC or not c then
+			c = Instance.new("Part")
+			c.Size = part.Size
+		end
+		for _, ch in ipairs(c:GetChildren()) do
+			if ch:IsA("DataModelMesh") then
+				pcall(function() ch.TextureId = "" end)
+			else
+				ch:Destroy()
+			end
+		end
+		if c:IsA("MeshPart") then
+			pcall(function() c.TextureID = "" end)
+		end
+		c.Anchored = true
+		c.CanCollide = false
+		c.CanQuery = false
+		c.CanTouch = false
+		c.Massless = true
+		c.CastShadow = false
+		c.CFrame = part.CFrame
+		return c
+	end
+
+	local function spawnGhost()
+		local parts = visibleBodyParts()
+		if #parts == 0 then return end
+		local folder = Instance.new("Folder")
+		folder.Name = "NOTGhost"
+		local color = D.Rainbow and Color3.fromHSV((os.clock() * 0.4) % 1, 1, 1) or Color3.fromRGB(D.R, D.G, D.B)
+		local material = Enum.Material.Neon
+		pcall(function() material = Enum.Material[D.Material] end)
+		local fade = math.max(0.1, D.Fade)
+		for i, part in ipairs(parts) do
+			if i > 80 then break end
+			local c = ghostOf(part)
+			c.Color = color
+			c.Material = material
+			c.Transparency = D.StartTransparency
+			c.Parent = folder
+			local goal = {Transparency = 1}
+			if D.Expand > 0 then goal.Size = c.Size * (1 + D.Expand) end
+			TweenService:Create(c, TweenInfo.new(fade, Enum.EasingStyle.Linear), goal):Play()
+		end
+		folder.Parent = workspace.CurrentCamera or workspace
+		table.insert(ghosts, folder)
+		task.delay(fade + 0.2, function() folder:Destroy() end)
+		for i = #ghosts, 1, -1 do
+			if not ghosts[i].Parent then table.remove(ghosts, i) end
+		end
+		while #ghosts > D.MaxGhosts do
+			local old = table.remove(ghosts, 1)
+			pcall(function() old:Destroy() end)
+		end
+	end
+
+	----------------------------------------------------------------
+	-- run both effects
+	----------------------------------------------------------------
+	local trailAcc, ghostAcc = 0, 0
+	local function step(dt)
+		-- trail
+		if T.Enabled then
+			trailAcc += dt
+			if trailAcc >= 0.25 or trailState.dirty then
+				trailAcc = 0
+				local parts = resolveTrailParts(T.Location)
+				local same = (not trailState.dirty) and #parts == #trailState.parts
+				if same then
+					for i, p in ipairs(parts) do
+						if trailState.parts[i] ~= p or not p.Parent then
+							same = false
+							break
+						end
+					end
+				end
+				if not same then buildTrails(parts) end
+			end
+			if T.Rainbow then
+				local seq = rainbowSequence(os.clock())
+				for _, o in ipairs(trailState.objs) do o.trail.Color = seq end
+			end
+		elseif #trailState.objs > 0 then
+			clearTrails()
+		end
+
+		-- ghosts
+		if D.Enabled then
+			ghostAcc += dt
+			if ghostAcc >= D.Interval then
+				ghostAcc = 0
+				if isDancing() then spawnGhost() end
+			end
+		elseif #ghosts > 0 then
+			clearGhosts()
+		end
+	end
+	local warned = false
+	RunService.Heartbeat:Connect(function(dt)
+		local ok, err = pcall(step, dt)
+		if not ok and not warned then
+			warned = true
+			warn("[" .. TITLE .. "] config effects error: " .. tostring(err))
+		end
+	end)
+
+	-- move the "Config" button right under the Store button (found by its text)
+	task.spawn(function()
+		local deadline = os.clock() + 180
+		while os.clock() < deadline and MainPage.Parent do
+			for _, d in ipairs(MainPage:GetDescendants()) do
+				if d:IsA("TextLabel") and d ~= cfgBtn then
+					local plain = d.Text:gsub("<[^>]*>", ""):lower()
+					if plain:find("%f[%a]store%f[%A]") then
+						local c = d
+						while c and c.Parent ~= MainPage do c = c.Parent end
+						if c and c ~= cfgContainer then
+							cfgContainer.LayoutOrder = c.LayoutOrder + 1
+							return
+						end
+					end
+				end
+			end
+			task.wait(1)
+		end
+	end)
+end
+
+-- The patched Uhhhhhh source calls this after its "UI Theme" dropdown.
+_G.NOTCreateConfigUI = function(UI, MainPage, SaveData, UISound)
+	local ok, err = pcall(buildConfigUI, UI, MainPage, SaveData, UISound)
+	if not ok then
+		warn("[" .. TITLE .. "] config page error: " .. tostring(err))
+	end
+end
+
+----------------------------------------------------------------
 -- ASCII background for the main GUI window
 ----------------------------------------------------------------
 local function injectAsciiBackground()
@@ -623,6 +1128,97 @@ local function injectAsciiBackground()
 	local plasma = mkLabel(-2, 0.88)
 	local logoLabel = mkLabel(-1, 0.6)
 
+	-- other backgrounds: ascii art from a .txt file, or an image from the backgrounds folder
+	local textBg = Instance.new("TextLabel")
+	textBg.BackgroundTransparency = 1
+	textBg.BorderSizePixel = 0
+	textBg.AnchorPoint = Vector2.new(0.5, 0.5)
+	textBg.Position = UDim2.fromScale(0.5, 0.5)
+	textBg.Size = UDim2.fromOffset(W, H)
+	textBg.Font = ASCII_FONT
+	textBg.TextSize = 8
+	textBg.TextColor3 = Color3.new(1, 1, 1)
+	textBg.TextTransparency = 0.55
+	textBg.TextXAlignment = Enum.TextXAlignment.Left
+	textBg.TextYAlignment = Enum.TextYAlignment.Top
+	textBg.TextWrapped = false
+	textBg.ZIndex = -2
+	textBg.Interactable = false
+	textBg.Visible = false
+	textBg.Text = ""
+	textBg.Parent = content
+
+	local imageBg = Instance.new("ImageLabel")
+	imageBg.BackgroundTransparency = 1
+	imageBg.BorderSizePixel = 0
+	imageBg.Size = UDim2.fromScale(1, 1)
+	imageBg.ScaleType = Enum.ScaleType.Crop
+	imageBg.ImageTransparency = 0.45
+	imageBg.ZIndex = -2
+	imageBg.Interactable = false
+	imageBg.Visible = false
+	imageBg.Parent = content
+
+	-- fit a text file's ascii art into the window and centre it
+	local function showText(txt)
+		txt = txt:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("\t", "    ")
+		local lines, maxc = {}, 1
+		for line in (txt .. "\n"):gmatch("(.-)\n") do
+			if #lines >= 200 then break end
+			if #line > 300 then line = line:sub(1, 300) end
+			lines[#lines + 1] = line
+			maxc = math.max(maxc, utf8.len(line) or #line)
+		end
+		while #lines > 1 and lines[#lines]:match("^%s*$") do
+			lines[#lines] = nil
+		end
+		local cw20, lh20 = asciiMetrics(20)
+		local fit = math.min(W * 0.96 / (maxc * cw20 / 20), H * 0.96 / (#lines * lh20 / 20))
+		local tsize = math.clamp(math.floor(fit), 3, 24)
+		local cwt, lht = asciiMetrics(tsize)
+		local body = table.concat(lines, "\n")
+		if #body > 15000 then body = body:sub(1, 15000) end
+		textBg.TextSize = tsize
+		textBg.Size = UDim2.fromOffset(math.ceil(maxc * cwt) + 4, math.ceil(#lines * lht))
+		textBg.Text = body
+	end
+
+	local function applyBackground()
+		local name = BG.current
+		local kind = "plasma"
+		local entry = nil
+		if name == BG_NONE then
+			kind = "none"
+		elseif name ~= BG_PLASMA then
+			entry = BG.byName[name]
+			if entry then kind = entry.kind end
+		end
+
+		if kind == "text" then
+			local ok, txt = pcall(readfile, entry.path)
+			if ok and type(txt) == "string" then
+				showText(txt)
+			else
+				kind = "plasma"
+			end
+		elseif kind == "image" then
+			local ok, asset = pcall(function() return getAsset(entry.path) end)
+			if ok and asset and asset ~= "" then
+				imageBg.Image = asset
+			else
+				kind = "plasma"
+			end
+		end
+
+		plasma.Visible = kind == "plasma"
+		logoLabel.Visible = kind == "plasma"
+		textBg.Visible = kind == "text"
+		imageBg.Visible = kind == "image"
+	end
+	BG.apply = applyBackground
+	BG.scan(false)
+	applyBackground()
+
 	local row0 = math.max(0, math.floor((rows - logoRows) / 2))
 	local col0 = math.max(0, math.floor((cols - logoCols) / 2))
 	local logoLines = table.create(rows)
@@ -679,6 +1275,7 @@ local function injectAsciiBackground()
 		else
 			plasma.TextColor3 = ref.TextColor3
 			logoLabel.TextColor3 = ref.TextColor3
+			textBg.TextColor3 = ref.TextColor3
 			if mainPage and mainPage.BackgroundTransparency ~= 1 then
 				mainPage.BackgroundTransparency = 1
 			end
@@ -688,6 +1285,7 @@ local function injectAsciiBackground()
 		if acc < 1 / 12 then return end
 		acc = 0
 		if not content.Visible then return end
+		if not plasma.Visible then return end
 
 		local t = os.clock() * 0.9
 		local lines = table.create(rows)
@@ -984,6 +1582,10 @@ local PATCHES = {
 	{"Util.MakeTriforce(3, Color3.new(1, 0.3, 0.3), 0)", "_G.NOTMakeLogo()"},
 	{"Triforce.Rotation = (Triforce.Rotation + trivel) % 360", "Triforce.Rotation = math.sin(t * 1.2) * 3"},
 	{"currentprocessor = math.random(1, #PositionProcessor)", "currentprocessor = math.random(1, 2)"},
+
+	-- "Background" dropdown directly under the "UI Theme" dropdown
+	{"SaveData.UITheme = val\n\tSetUITheme(SaveData.UITheme)\nend)",
+		"SaveData.UITheme = val\n\tSetUITheme(SaveData.UITheme)\nend)\npcall(_G.NOTCreateBackgroundUI, UI, MainPage)\npcall(_G.NOTCreateConfigUI, UI, MainPage, SaveData, UISound)"},
 }
 
 local missed = {}
