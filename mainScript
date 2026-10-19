@@ -3,23 +3,38 @@
 	Loading screen: the ASCII-art sparkle logo grows into the screen in black and white,
 	fades in, rolls in a sine wave, then explodes into static.
 	The GUI also gets an animated ASCII background.
+	Tap the screen during the intro to skip it.
 	After that it loads the Uhhhhhh fork from your link and renames it.
 
 	Original Uhhhhhh code: STEVETHEREALONE, BoredGal (patches), Awes955 (mod).
 	Credits stay in the source, point at it if you reuse snippets.
 ]]
 
-if _G.NOTuhhhhhhReanimationsLoaded or _G.UhhhhhhLoaded then return end
+if _G.NOTuhhhhhhReanimationsLoaded or _G.UhhhhhhLoaded then
+	pcall(function()
+		game:GetService("StarterGui"):SetCore("SendNotification", {
+			Title = "NOTuhhhhhh reanimations",
+			Text = "Already running. Rejoin to start it again.",
+			Duration = 4,
+		})
+	end)
+	return
+end
 _G.NOTuhhhhhhReanimationsLoaded = true
 
 local SOURCE_URL = "https://raw.githubusercontent.com/testing734/UhhhhhhModded/refs/heads/main/uhhhhhh%20awes%20fork"
 local TITLE = "NOTuhhhhhh reanimations"
 
--- this script keeps its own data folder (saves, assets, modules, animations...)
-local DATA_FOLDER = "NOTuhhhhhhReanim"
+-- this script keeps its own data folder (saves, assets, modules, animations...).
+-- It has to be exactly as long as "UhhhhhhReanim" (13 characters), because the original code
+-- cuts file names out of folder paths by position.
+local DATA_FOLDER = "NOTuhhhReanim"
 -- folders the two import buttons copy from
 local SRC_UHHHHHH = "UhhhhhhReanim"
 local SRC_BLAABLAA = "BlaablaaReanim"
+
+-- the explosion flickers a lot. Set to true for a calmer one (slower, dimmer flicker).
+local REDUCE_FLASHING = false
 
 local cloneref = cloneref or function(o) return o end
 local TweenService = cloneref(game:GetService("TweenService"))
@@ -109,6 +124,7 @@ end
 -- Loading screen (black & white ASCII logo: grows in, waves, explodes into static)
 ----------------------------------------------------------------
 local introGui
+local introConns = {}
 
 local function playIntro()
 	repeat task.wait() until workspace.CurrentCamera
@@ -200,6 +216,30 @@ local function playIntro()
 			stage.Position = UDim2.fromOffset((math.random() * 2 - 1) * shake, (math.random() * 2 - 1) * shake)
 		end
 	end)
+
+	-- tap anywhere to skip the intro
+	local skipped = false
+	local skipBtn = Instance.new("TextButton")
+	skipBtn.Size = UDim2.fromScale(1, 1)
+	skipBtn.BackgroundTransparency = 1
+	skipBtn.Text = ""
+	skipBtn.AutoButtonColor = false
+	skipBtn.ZIndex = 50
+	skipBtn.Parent = gui
+	skipBtn.Activated:Connect(function() skipped = true end)
+
+	local skipHint = Instance.new("TextLabel")
+	skipHint.AnchorPoint = Vector2.new(0.5, 1)
+	skipHint.Position = UDim2.new(0.5, 0, 1, -12)
+	skipHint.Size = UDim2.fromOffset(200, 20)
+	skipHint.BackgroundTransparency = 1
+	skipHint.Font = ASCII_FONT
+	skipHint.TextSize = 14
+	skipHint.TextColor3 = WHITE
+	skipHint.TextTransparency = 0.6
+	skipHint.Text = "[ tap to skip ]"
+	skipHint.ZIndex = 51
+	skipHint.Parent = gui
 
 	-- the logo root fills the screen; a UIScale on it makes the whole logo "grow into" the screen
 	local root = Instance.new("Frame")
@@ -350,6 +390,10 @@ local function playIntro()
 		return 1 + c3 * (k - 1) ^ 3 + c1 * (k - 1) ^ 2
 	end
 
+	table.insert(introConns, noiseConn)
+	table.insert(introConns, shakeConn)
+	table.insert(introConns, waveConn)
+
 	-- 1) GROW: the logo grows into the screen from a tiny size, fading in from the middle outwards
 	waving, scramP = true, 1
 	local GROW = 1.7
@@ -357,7 +401,7 @@ local function playIntro()
 	while true do
 		RunService.Heartbeat:Wait()
 		local k = (os.clock() - t0) / GROW
-		if k >= 1 then break end
+		if k >= 1 or skipped then break end
 		grow.Scale = 0.12 + 0.88 * easeOutBack(k)
 		waveAmp = waveBase * math.clamp(k * 1.5 - 0.3, 0, 1)
 		scramP = (1 - k) ^ 1.5
@@ -375,7 +419,7 @@ local function playIntro()
 	-- 2) HOLD: the wave keeps rolling, the logo breathes a little
 	local HOLD = 1.6
 	t0 = os.clock()
-	while os.clock() - t0 < HOLD do
+	while os.clock() - t0 < HOLD and not skipped do
 		RunService.Heartbeat:Wait()
 		grow.Scale = 1 + 0.015 * math.sin((os.clock() - t0) * 3)
 	end
@@ -386,7 +430,7 @@ local function playIntro()
 	while true do
 		RunService.Heartbeat:Wait()
 		local k = (os.clock() - t0) / CHARGE
-		if k >= 1 then break end
+		if k >= 1 or skipped then break end
 		grow.Scale = 1 + 0.08 * k
 		waveAmp = waveBase * (1 + k)
 		waveSpeed = 3 + k * 7
@@ -395,7 +439,8 @@ local function playIntro()
 		shake = 3 + k * 14
 	end
 
-	-- 4) BOOM
+	-- 4) BOOM (not when the intro was skipped)
+	if not skipped then
 	waving = false
 	scramP, jit = 0, 0
 	grow.Scale = 1
@@ -404,7 +449,7 @@ local function playIntro()
 	local flash = Instance.new("Frame")
 	flash.Size = UDim2.fromScale(1, 1)
 	flash.BackgroundColor3 = WHITE
-	flash.BackgroundTransparency = 0.1
+	flash.BackgroundTransparency = REDUCE_FLASHING and 0.6 or 0.1
 	flash.BorderSizePixel = 0
 	flash.ZIndex = 7
 	flash.Parent = gui
@@ -412,8 +457,8 @@ local function playIntro()
 	task.delay(0.55, function() flash:Destroy() end)
 
 	-- STATIC: the ascii noise layer jumps to full brightness and flickers every frame
-	activePool, noiseRate = densePool, 0
-	noise.TextTransparency = 0.1
+	activePool, noiseRate = densePool, REDUCE_FLASHING and 0.25 or 0
+	noise.TextTransparency = REDUCE_FLASHING and 0.5 or 0.1
 
 	for _, L in ipairs(flyers) do
 		L.label.Text = L.text
@@ -459,12 +504,12 @@ local function playIntro()
 	while true do
 		local dt = math.min(RunService.Heartbeat:Wait(), 0.05)
 		local el = os.clock() - start
-		if el > BOOM_TIME then break end
+		if el > BOOM_TIME or skipped then break end
 		local fade = math.clamp((el - 0.7) / 0.9, 0, 1)
 
 		-- flicker the static during the blast, then let it settle back to the dim background
 		if el < 0.9 then
-			noise.TextTransparency = math.random() * 0.35
+			noise.TextTransparency = REDUCE_FLASHING and 0.5 or math.random() * 0.35
 		elseif not calmed then
 			calmed = true
 			activePool, noiseRate = pool, 0.05
@@ -491,10 +536,16 @@ local function playIntro()
 		end
 	end
 
+	end
+
 	shakeConn:Disconnect()
 	noiseConn:Disconnect()
 	waveConn:Disconnect()
 	stage.Position = UDim2.fromOffset(0, 0)
+	skipHint.Visible = false
+	for _, L in ipairs(flyers) do
+		TweenService:Create(L.label, TweenInfo.new(0.3), {TextTransparency = 1}):Play()
+	end
 	TweenService:Create(noise, TweenInfo.new(0.35), {TextTransparency = 1}):Play()
 	TweenService:Create(base, TweenInfo.new(0.35), {BackgroundTransparency = 1}):Play()
 	task.wait(0.4)
@@ -605,12 +656,34 @@ local function injectAsciiBackground()
 	local nramp = #RAMP
 	local mx, my = cols / 2, rows / 2
 	local acc = 0
+	local ref, refT, mainPage = nil, 0, nil
 	local conn
 	conn = RunService.Heartbeat:Connect(function(dt)
 		if not plasma.Parent then
 			conn:Disconnect()
 			return
 		end
+		-- take the text colour from the UI so light themes get dark ascii instead of white
+		if not ref then
+			refT += dt
+			if refT > 1 then
+				refT = 0
+				for _, d in ipairs(content:GetDescendants()) do
+					if d:IsA("TextLabel") and d.Text:find("Back to cool scene", 1, true) then
+						ref = d
+						mainPage = d:FindFirstAncestorWhichIsA("ScrollingFrame")
+						break
+					end
+				end
+			end
+		else
+			plasma.TextColor3 = ref.TextColor3
+			logoLabel.TextColor3 = ref.TextColor3
+			if mainPage and mainPage.BackgroundTransparency ~= 1 then
+				mainPage.BackgroundTransparency = 1
+			end
+		end
+
 		acc += dt
 		if acc < 1 / 12 then return end
 		acc = 0
@@ -638,25 +711,8 @@ local function injectAsciiBackground()
 		logoLabel.TextTransparency = 0.62 + math.sin(os.clock() * 2) * 0.08
 	end)
 
-	-- make the opaque pages see-through so the ascii shows behind the UI
-	local function clearPages()
-		for _, c in ipairs(content:GetChildren()) do
-			if (c:IsA("Frame") or c:IsA("ScrollingFrame")) and c.BackgroundTransparency == 0 and c.ZIndex < 10 then
-				c.BackgroundTransparency = 1
-			end
-		end
-	end
-	clearPages()
-	content.ChildAdded:Connect(function()
-		task.defer(clearPages)
-		task.delay(0.1, clearPages)
-	end)
-	task.spawn(function()
-		while plasma.Parent do
-			task.wait(0.5)
-			clearPages()
-		end
-	end)
+	-- Only the main page is made see-through (inside the loop above).
+	-- Every other page stacks on top of the previous one and has to stay solid.
 end
 
 ----------------------------------------------------------------
@@ -709,7 +765,7 @@ local function injectImportButtons()
 	if okH and hid then table.insert(roots, 1, hid) end
 
 	-- the main page is the one with the "Back to cool scene" button
-	local page
+	local page, refLabel, refButton
 	local deadline = os.clock() + 300
 	while not page and os.clock() < deadline do
 		for _, root in ipairs(roots) do
@@ -718,7 +774,17 @@ local function injectImportButtons()
 					for _, d in ipairs(g:GetDescendants()) do
 						if d:IsA("TextLabel") and d.Text:find("Back to cool scene", 1, true) then
 							page = d:FindFirstAncestorWhichIsA("ScrollingFrame")
-							break
+							if not page then
+								local cur = d.Parent
+								while cur and not cur:FindFirstChildOfClass("UIListLayout") do
+									cur = cur.Parent
+								end
+								page = cur
+							end
+							if page then
+								refLabel, refButton = d, d.Parent
+								break
+							end
 						end
 					end
 				end
@@ -769,6 +835,7 @@ local function injectImportButtons()
 	hint.Parent = hintC
 
 	local busy = false
+	local styled = {}
 	local function makeButton(order, text, folderName)
 		local c = container(order, 40)
 		local b = Instance.new("TextButton")
@@ -790,6 +857,7 @@ local function injectImportButtons()
 		stroke.Color = Color3.new(1, 1, 1)
 		stroke.Thickness = 1
 		stroke.Parent = b
+		table.insert(styled, {b = b, stroke = stroke})
 
 		b.Activated:Connect(function()
 			if busy then return end
@@ -822,6 +890,26 @@ local function injectImportButtons()
 
 	makeButton(1000002, "Import from " .. SRC_UHHHHHH, SRC_UHHHHHH)
 	makeButton(1000003, "Import from " .. SRC_BLAABLAA, SRC_BLAABLAA)
+
+	-- copy the look of the UI's own buttons so the new ones match every theme
+	local refStroke = refButton and refButton:FindFirstChildOfClass("UIStroke")
+	local syncConn
+	syncConn = RunService.Heartbeat:Connect(function()
+		if not page.Parent then
+			syncConn:Disconnect()
+			return
+		end
+		local fg = refLabel and refLabel.TextColor3 or Color3.new(1, 1, 1)
+		local line = refStroke and refStroke.Color or fg
+		local bg = refButton and refButton.BackgroundColor3 or Color3.new(0, 0, 0)
+		for _, st in ipairs(styled) do
+			st.b.BackgroundColor3 = bg
+			st.b.TextColor3 = fg
+			st.stroke.Color = line
+		end
+		hint.TextColor3 = fg
+		sep.BackgroundColor3 = fg
+	end)
 end
 
 ----------------------------------------------------------------
@@ -842,24 +930,31 @@ end)
 local introOk, introErr = pcall(playIntro)
 if not introOk then
 	warn("[" .. TITLE .. "] intro error: " .. tostring(introErr))
+	for _, c in ipairs(introConns) do pcall(function() c:Disconnect() end) end
 	if introGui then pcall(function() introGui:Destroy() end) end
 end
-repeat task.wait() until fetched
+do
+	local waitStart = os.clock()
+	repeat task.wait() until fetched or os.clock() - waitStart > 45
+end
 
 if not src then
 	_G.NOTuhhhhhhReanimationsLoaded = nil
 	notify("Couldn't download the script. Check your connection.")
-	warn("[" .. TITLE .. "] download failed: " .. tostring(fetchErr))
+	warn("[" .. TITLE .. "] download failed: " .. tostring(fetchErr or "timed out"))
 	return
 end
 
 ----------------------------------------------------------------
 -- Rename + skip the original intro (ours already played)
 ----------------------------------------------------------------
+-- plain text replace that also matches when the original uses different spacing/indentation.
+-- returns the new source and how many places were changed.
 local function replaceAll(s, from, to)
 	local pat = from:gsub("%p", "%%%0")
+	pat = pat:gsub("%s+", "%%s+")
 	local rep = to:gsub("%%", "%%%%")
-	return (s:gsub(pat, rep))
+	return s:gsub(pat, rep)
 end
 
 local PATCHES = {
@@ -891,8 +986,17 @@ local PATCHES = {
 	{"currentprocessor = math.random(1, #PositionProcessor)", "currentprocessor = math.random(1, 2)"},
 }
 
+local missed = {}
 for _, p in ipairs(PATCHES) do
-	src = replaceAll(src, p[1], p[2])
+	local n
+	src, n = replaceAll(src, p[1], p[2])
+	if n == 0 then table.insert(missed, p[1]) end
+end
+if #missed > 0 then
+	for _, m in ipairs(missed) do
+		warn("[" .. TITLE .. "] patch didn't match: " .. m)
+	end
+	notify(#missed .. " patch(es) didn't match, the original script may have changed (see console).")
 end
 
 local fn, err = loadstring(src, "=" .. TITLE)
@@ -945,4 +1049,9 @@ task.spawn(function()
 	if not ok then warn("[" .. TITLE .. "] import buttons error: " .. tostring(e)) end
 end)
 
-fn()
+local okRun, runErr = pcall(fn)
+if not okRun then
+	_G.NOTuhhhhhhReanimationsLoaded = nil
+	warn("[" .. TITLE .. "] " .. tostring(runErr))
+	notify("Script stopped with an error, see console.")
+end
