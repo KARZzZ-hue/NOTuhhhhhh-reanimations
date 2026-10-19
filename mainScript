@@ -1,0 +1,948 @@
+--[[
+	NOTuhhhhhh reanimations
+	Loading screen: the ASCII-art sparkle logo grows into the screen in black and white,
+	fades in, rolls in a sine wave, then explodes into static.
+	The GUI also gets an animated ASCII background.
+	After that it loads the Uhhhhhh fork from your link and renames it.
+
+	Original Uhhhhhh code: STEVETHEREALONE, BoredGal (patches), Awes955 (mod).
+	Credits stay in the source, point at it if you reuse snippets.
+]]
+
+if _G.NOTuhhhhhhReanimationsLoaded or _G.UhhhhhhLoaded then return end
+_G.NOTuhhhhhhReanimationsLoaded = true
+
+local SOURCE_URL = "https://raw.githubusercontent.com/testing734/UhhhhhhModded/refs/heads/main/uhhhhhh%20awes%20fork"
+local TITLE = "NOTuhhhhhh reanimations"
+
+-- this script keeps its own data folder (saves, assets, modules, animations...)
+local DATA_FOLDER = "NOTuhhhhhhReanim"
+-- folders the two import buttons copy from
+local SRC_UHHHHHH = "UhhhhhhReanim"
+local SRC_BLAABLAA = "BlaablaaReanim"
+
+local cloneref = cloneref or function(o) return o end
+local TweenService = cloneref(game:GetService("TweenService"))
+local RunService = cloneref(game:GetService("RunService"))
+local TextService = cloneref(game:GetService("TextService"))
+local CoreGui = cloneref(game:GetService("CoreGui"))
+local StarterGui = cloneref(game:GetService("StarterGui"))
+local Players = cloneref(game:GetService("Players"))
+
+local function notify(text)
+	pcall(function()
+		StarterGui:SetCore("SendNotification", {Title = TITLE, Text = text, Duration = 5})
+	end)
+end
+
+----------------------------------------------------------------
+-- ASCII art helpers + the ASCII logo
+----------------------------------------------------------------
+local ASCII_FONT = Enum.Font.Code
+
+-- The logo (white sparkle on black), converted from your image to ASCII.
+-- LOGO_BIG is used for the loading screen, LOGO_SMALL for the GUI background.
+local LOGO_BIG = {
+	"                        :                       ",
+	"                        *                       ",
+	"                        @.                      ",
+	"                       :@-                      ",
+	"                       +@*                      ",
+	"                -      %@%                      ",
+	"               -@     .@@@.        :=+*###*+-   ",
+	"            .-*@@@+-. =@@@=  .=*##%%%%%%@@@@@@+ ",
+	"            .=*@@@+-. %@@@%:-=:          .+@@@@.",
+	"               -@    -@@@@@-               +@@@.",
+	"                ::: .@@@%@@@.              %@@- ",
+	"             .+*+- :@@@@:@@@%.           .#@%:  ",
+	"          :*%#-  -#@@@@+ +@@@@*.        =@%-    ",
+	"        -*#*+*#@@@@@@@=   =@@@@@@%#+=:.+#-      ",
+	"     :+*%@@@@@@@@@@@=       =@@@@@@@@@@@%*=:    ",
+	"    -%@-   .-+*%@@@@@@+   +@@@@@@%#+=**-        ",
+	"  .%@#           .+@@@@* +@@@@#- :*%#=          ",
+	" -@@%               *@@@-@@@%.:+**=             ",
+	" @@@*                #@@@@@%.-=. *              ",
+	".@@@@*:           .=--@@@@@:    *@*             ",
+	" *@@@@@@@%%##%##*++:  *@@@#  .=%@@@%=.          ",
+	"   =*#####*+=:        :@@@:     +@+             ",
+	"                       %@@       +              ",
+	"                       *@*                      ",
+	"                       :@=                      ",
+	"                        @.                      ",
+	"                        *                       ",
+	"                        :                       ",
+}
+
+local LOGO_SMALL = {
+	"                -               ",
+	"                #               ",
+	"               -@               ",
+	"          .    *@.              ",
+	"          #+   %@+   .-+*#%%#*- ",
+	"        :#@@*.:@@@:-=++=--=*@@@+",
+	"          *=  #@@@-          @@=",
+	"         :=-.+@@#@@:        *@+ ",
+	"      :**+.+%@@#.@@@*:    -%#:  ",
+	"   .=*@%@@@@@%+  .*@@@@@%#%+-   ",
+	"  :#*.-=+#%@@@%: =@@@@%###-.    ",
+	" +@*        -@@@-@@%-=**=       ",
+	"=@@.         .@@@@#:=-+         ",
+	"+@@@*=-:--===-=@@@..=%@*-       ",
+	" -*%%%%#*+:    @@*  .*@=.       ",
+	"               *@:    -         ",
+	"               -@               ",
+	"                #               ",
+	"                -               ",
+}
+
+-- character width and line height of the monospace font at a given size
+local function asciiMetrics(size)
+	local big = Vector2.new(1000, 1000)
+	local cw = TextService:GetTextSize("#", size, ASCII_FONT, big).X
+	local lh = TextService:GetTextSize("#\n#", size, ASCII_FONT, big).Y / 2
+	if cw <= 0 then cw = size * 0.55 end
+	if lh <= 0 then lh = size end
+	return cw, lh
+end
+
+----------------------------------------------------------------
+-- Loading screen (black & white ASCII logo: grows in, waves, explodes into static)
+----------------------------------------------------------------
+local introGui
+
+local function playIntro()
+	repeat task.wait() until workspace.CurrentCamera
+	local vp = workspace.CurrentCamera.ViewportSize
+	local cx, cy = vp.X / 2, vp.Y / 2
+	local WHITE = Color3.new(1, 1, 1)
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = tostring(math.random(1000000, 9000000))
+	gui.IgnoreGuiInset = true
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 2147483647
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+	local hidden = (gethui and gethui()) or (get_hidden_gui and get_hidden_gui())
+	if not pcall(function() gui.Parent = hidden or CoreGui end) then
+		gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+	end
+	introGui = gui
+
+	local base = Instance.new("Frame")
+	base.Size = UDim2.fromScale(1, 1)
+	base.BackgroundColor3 = Color3.new(0, 0, 0)
+	base.BorderSizePixel = 0
+	base.ZIndex = 1
+	base.Parent = gui
+
+	-- dim ascii static in the back (it turns into the big static burst when the logo explodes)
+	local NSIZE = 12
+	local ncw, nlh = asciiMetrics(NSIZE)
+	local ncols, nrows = math.ceil(vp.X / ncw) + 1, math.ceil(vp.Y / nlh) + 1
+	local NPOOL = "01#:.+*%@=-"
+	local pool, densePool = {}, {}
+	for i = 1, 40 do
+		local r, d = table.create(ncols), table.create(ncols)
+		for c = 1, ncols do
+			local k = math.random(#NPOOL)
+			r[c] = (math.random() < 0.55) and " " or NPOOL:sub(k, k)
+			k = math.random(#NPOOL)
+			d[c] = (math.random() < 0.08) and " " or NPOOL:sub(k, k)
+		end
+		pool[i] = table.concat(r)
+		densePool[i] = table.concat(d)
+	end
+	local activePool, noiseRate = pool, 0.05
+
+	local noise = Instance.new("TextLabel")
+	noise.BackgroundTransparency = 1
+	noise.Size = UDim2.fromScale(1, 1)
+	noise.Font = ASCII_FONT
+	noise.TextSize = NSIZE
+	noise.TextColor3 = WHITE
+	noise.TextTransparency = 1
+	noise.TextXAlignment = Enum.TextXAlignment.Left
+	noise.TextYAlignment = Enum.TextYAlignment.Top
+	noise.TextWrapped = false
+	noise.ZIndex = 2
+	noise.Parent = gui
+	TweenService:Create(noise, TweenInfo.new(0.5), {TextTransparency = 0.9}):Play()
+	local function tickNoise()
+		local lines = table.create(nrows)
+		for i = 1, nrows do lines[i] = activePool[math.random(#activePool)] end
+		noise.Text = table.concat(lines, "\n")
+	end
+	tickNoise()
+	local nacc = 0
+	local noiseConn = RunService.Heartbeat:Connect(function(dt)
+		nacc += dt
+		if nacc >= noiseRate then
+			nacc = 0
+			tickNoise()
+		end
+	end)
+
+	-- everything that shakes lives in here
+	local stage = Instance.new("Frame")
+	stage.Size = UDim2.fromScale(1, 1)
+	stage.BackgroundTransparency = 1
+	stage.BorderSizePixel = 0
+	stage.ZIndex = 3
+	stage.Parent = gui
+
+	local shake = 0
+	local shakeConn = RunService.Heartbeat:Connect(function(dt)
+		shake *= math.exp(-9 * dt)
+		if shake < 0.3 then
+			stage.Position = UDim2.fromOffset(0, 0)
+		else
+			stage.Position = UDim2.fromOffset((math.random() * 2 - 1) * shake, (math.random() * 2 - 1) * shake)
+		end
+	end)
+
+	-- the logo root fills the screen; a UIScale on it makes the whole logo "grow into" the screen
+	local root = Instance.new("Frame")
+	root.AnchorPoint = Vector2.new(0.5, 0.5)
+	root.Position = UDim2.fromScale(0.5, 0.5)
+	root.Size = UDim2.fromScale(1, 1)
+	root.BackgroundTransparency = 1
+	root.BorderSizePixel = 0
+	root.ZIndex = 3
+	root.Parent = stage
+	local grow = Instance.new("UIScale")
+	grow.Scale = 0.12
+	grow.Parent = root
+
+	-- size the logo to the screen (phones too)
+	local LOGO = LOGO_BIG
+	local LCOLS, LROWS = #LOGO[1], #LOGO
+	local TILE_C, TILE_R = 4, 7 -- the logo is cut into tiles of 4 columns x 7 rows
+	local SUB = "N O T U H H H H H H   R E A N I M A T I O N S"
+	local cw20, lh20 = asciiMetrics(20)
+	local cwr, lhr = cw20 / 20, lh20 / 20
+	local sizeW = math.floor(vp.X * 0.8 / (LCOLS * cwr))
+	local sizeH = math.floor(vp.Y * 0.6 / (LROWS * lhr))
+	local size = math.clamp(math.min(sizeW, sizeH), 5, 30)
+	local cw, lh = asciiMetrics(size)
+	local subSize = math.clamp(math.min(math.floor(vp.X * 0.85 / (#SUB * cwr)), math.floor(size * 1.5)), 7, 30)
+	local scw, slh = asciiMetrics(subSize)
+	local gap = lh * 2
+	local logoH = LROWS * lh
+	local logoW = LCOLS * cw
+	local subW = #SUB * scw
+	local totalH = logoH + gap + slh
+	local y0 = cy - totalH / 2
+	local bx = cx - logoW / 2
+	local waveBase = math.max(5, math.floor(logoH * 0.05))
+
+	local flyers, chunks, subChars = {}, {}, {}
+	local function makeFlyer(o)
+		local l = Instance.new("TextLabel")
+		l.AnchorPoint = Vector2.new(0.5, 0.5)
+		l.Size = UDim2.fromOffset(o.w, o.h)
+		l.Position = UDim2.fromOffset(o.x, o.y)
+		l.BackgroundTransparency = 1
+		l.Font = ASCII_FONT
+		l.TextSize = o.size
+		l.Text = o.text
+		l.TextColor3 = WHITE
+		l.TextTransparency = 1
+		l.TextXAlignment = o.align
+		l.TextYAlignment = Enum.TextYAlignment.Top
+		l.TextWrapped = false
+		l.ZIndex = 3
+		l.Parent = root
+		local L = {
+			label = l, text = o.text, x = o.x, y = o.y, px = o.x, py = o.y,
+			vx = 0, vy = 0, rot = 0, vr = 0,
+			scr = o.scr, ampMul = o.ampMul, rotMul = o.rotMul,
+			ph = o.ph, d = o.d or 0, order = o.order or 0,
+		}
+		table.insert(flyers, L)
+		return L
+	end
+
+	-- logo tiles (empty tiles are skipped)
+	local ncg, nrg = math.floor(LCOLS / TILE_C), math.floor(LROWS / TILE_R)
+	for gr = 1, nrg do
+		for gc = 1, ncg do
+			local lines, any = {}, false
+			for r = (gr - 1) * TILE_R + 1, gr * TILE_R do
+				local seg = LOGO[r]:sub((gc - 1) * TILE_C + 1, gc * TILE_C)
+				if seg:find("%S") then any = true end
+				lines[#lines + 1] = seg
+			end
+			if any then
+				local x = bx + ((gc - 1) * TILE_C + TILE_C / 2) * cw
+				local y = y0 + ((gr - 1) * TILE_R + TILE_R / 2) * lh
+				local dx = (x - cx) / (logoW / 2)
+				local dy = (y - (y0 + logoH / 2)) / (logoH / 2)
+				table.insert(chunks, makeFlyer({
+					w = TILE_C * cw + 2, h = TILE_R * lh,
+					x = x, y = y, size = size,
+					text = table.concat(lines, "\n"), align = Enum.TextXAlignment.Left,
+					scr = true, ampMul = 1, rotMul = 0,
+					ph = (x - cx) / logoW * math.pi * 2 * 1.2,
+					d = math.clamp(math.sqrt(dx * dx + dy * dy) / 1.5, 0, 1),
+				}))
+			end
+		end
+	end
+
+	-- name under the logo: one label per letter so the wave runs through it too
+	local subX0 = cx - subW / 2
+	local subY = y0 + logoH + gap + slh / 2
+	for i = 1, #SUB do
+		local ch = SUB:sub(i, i)
+		if ch ~= " " then
+			local x = subX0 + (i - 0.5) * scw
+			table.insert(subChars, makeFlyer({
+				w = scw + 2, h = slh, x = x, y = subY,
+				size = subSize, text = ch, align = Enum.TextXAlignment.Center,
+				scr = false, ampMul = 0.6, rotMul = 0.6,
+				ph = (x - cx) / subW * math.pi * 2 * 1.5, order = i,
+			}))
+		end
+	end
+
+	-- ascii "decode" effect: random characters that resolve into the real art
+	local SCR = "#:.+*%@01<>/\\|=-"
+	local function scrambled(text, p)
+		return (text:gsub("%S", function()
+			if math.random() < p then
+				local k = math.random(#SCR)
+				return SCR:sub(k, k)
+			end
+		end))
+	end
+
+	-- the sine wave: a traveling wave runs left -> right through the logo and the name
+	local waving, waveAmp, waveSpeed, jit, scramP = false, 0, 3, 0, 0
+	local wt = 0
+	local waveConn = RunService.Heartbeat:Connect(function(dt)
+		if not waving then return end
+		wt += dt * waveSpeed
+		for _, L in ipairs(flyers) do
+			local amp = waveAmp * L.ampMul
+			local x, y = L.x, L.y + math.sin(wt + L.ph) * amp
+			if jit > 0 then
+				x += (math.random() * 2 - 1) * jit
+				y += (math.random() * 2 - 1) * jit
+			end
+			L.label.Position = UDim2.fromOffset(x, y)
+			L.label.Rotation = math.cos(wt + L.ph) * waveAmp * 0.25 * L.rotMul
+			if L.scr then
+				if scramP > 0 then
+					L.label.Text = scrambled(L.text, scramP)
+					L.dirty = true
+				elseif L.dirty then
+					L.label.Text = L.text
+					L.dirty = false
+				end
+			end
+		end
+	end)
+
+	local function easeOutBack(k)
+		local c1 = 1.70158
+		local c3 = c1 + 1
+		return 1 + c3 * (k - 1) ^ 3 + c1 * (k - 1) ^ 2
+	end
+
+	-- 1) GROW: the logo grows into the screen from a tiny size, fading in from the middle outwards
+	waving, scramP = true, 1
+	local GROW = 1.7
+	local t0 = os.clock()
+	while true do
+		RunService.Heartbeat:Wait()
+		local k = (os.clock() - t0) / GROW
+		if k >= 1 then break end
+		grow.Scale = 0.12 + 0.88 * easeOutBack(k)
+		waveAmp = waveBase * math.clamp(k * 1.5 - 0.3, 0, 1)
+		scramP = (1 - k) ^ 1.5
+		for _, L in ipairs(chunks) do
+			L.label.TextTransparency = 1 - math.clamp(k * 1.5 - L.d * 0.5, 0, 1)
+		end
+		for _, L in ipairs(subChars) do
+			local k0 = 0.4 + 0.5 * (L.order / #SUB)
+			L.label.TextTransparency = 1 - math.clamp((k - k0) / 0.12, 0, 1)
+		end
+	end
+	grow.Scale, waveAmp, scramP = 1, waveBase, 0
+	for _, L in ipairs(flyers) do L.label.TextTransparency = 0 end
+
+	-- 2) HOLD: the wave keeps rolling, the logo breathes a little
+	local HOLD = 1.6
+	t0 = os.clock()
+	while os.clock() - t0 < HOLD do
+		RunService.Heartbeat:Wait()
+		grow.Scale = 1 + 0.015 * math.sin((os.clock() - t0) * 3)
+	end
+
+	-- 3) CHARGE: the wave gets faster and taller, the ascii corrupts, the screen shakes
+	local CHARGE = 0.9
+	t0 = os.clock()
+	while true do
+		RunService.Heartbeat:Wait()
+		local k = (os.clock() - t0) / CHARGE
+		if k >= 1 then break end
+		grow.Scale = 1 + 0.08 * k
+		waveAmp = waveBase * (1 + k)
+		waveSpeed = 3 + k * 7
+		jit = 1 + k * 7
+		scramP = 0.03 + k * 0.4
+		shake = 3 + k * 14
+	end
+
+	-- 4) BOOM
+	waving = false
+	scramP, jit = 0, 0
+	grow.Scale = 1
+	shake = 30
+
+	local flash = Instance.new("Frame")
+	flash.Size = UDim2.fromScale(1, 1)
+	flash.BackgroundColor3 = WHITE
+	flash.BackgroundTransparency = 0.1
+	flash.BorderSizePixel = 0
+	flash.ZIndex = 7
+	flash.Parent = gui
+	TweenService:Create(flash, TweenInfo.new(0.5), {BackgroundTransparency = 1}):Play()
+	task.delay(0.55, function() flash:Destroy() end)
+
+	-- STATIC: the ascii noise layer jumps to full brightness and flickers every frame
+	activePool, noiseRate = densePool, 0
+	noise.TextTransparency = 0.1
+
+	for _, L in ipairs(flyers) do
+		L.label.Text = L.text
+		L.label.Rotation = 0
+		L.label.Position = UDim2.fromOffset(L.x, L.y)
+		L.vx = (L.x - cx) * 4 + (math.random() - 0.5) * 300
+		L.vy = (L.y - cy) * 2 - math.random(200, 700)
+		L.vr = (math.random() - 0.5) * 1000
+		L.rot = 0
+	end
+
+	-- ascii debris
+	local SPK = "#:.+*%@01<>/|=-"
+	local sparks = {}
+	for _ = 1, 90 do
+		local ssz = math.random(8, 22)
+		local f = Instance.new("TextLabel")
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
+		f.Size = UDim2.fromOffset(ssz, ssz)
+		f.BackgroundTransparency = 1
+		f.Font = ASCII_FONT
+		f.TextSize = ssz
+		local k = math.random(#SPK)
+		f.Text = SPK:sub(k, k)
+		f.TextColor3 = WHITE
+		f.ZIndex = 6
+		local px = cx + (math.random() - 0.5) * logoW * 0.7
+		local py = cy + (math.random() - 0.5) * totalH * 0.5
+		f.Position = UDim2.fromOffset(px, py)
+		f.Parent = gui
+		local a = math.random() * math.pi * 2
+		local sp = math.random(250, 900)
+		table.insert(sparks, {
+			f = f, px = px, py = py,
+			vx = math.cos(a) * sp, vy = math.sin(a) * sp - 120,
+			rot = math.random(0, 360), vr = (math.random() - 0.5) * 900,
+		})
+	end
+
+	local GRAVITY, BOOM_TIME = 1500, 1.8
+	local start = os.clock()
+	local calmed = false
+	while true do
+		local dt = math.min(RunService.Heartbeat:Wait(), 0.05)
+		local el = os.clock() - start
+		if el > BOOM_TIME then break end
+		local fade = math.clamp((el - 0.7) / 0.9, 0, 1)
+
+		-- flicker the static during the blast, then let it settle back to the dim background
+		if el < 0.9 then
+			noise.TextTransparency = math.random() * 0.35
+		elseif not calmed then
+			calmed = true
+			activePool, noiseRate = pool, 0.05
+			TweenService:Create(noise, TweenInfo.new(0.5), {TextTransparency = 0.9}):Play()
+		end
+
+		for _, L in ipairs(flyers) do
+			L.vy += GRAVITY * dt
+			L.px += L.vx * dt
+			L.py += L.vy * dt
+			L.rot += L.vr * dt
+			L.label.Position = UDim2.fromOffset(L.px, L.py)
+			L.label.Rotation = L.rot
+			L.label.TextTransparency = fade
+		end
+		for _, S in ipairs(sparks) do
+			S.vy += GRAVITY * 0.6 * dt
+			S.px += S.vx * dt
+			S.py += S.vy * dt
+			S.rot += S.vr * dt
+			S.f.Position = UDim2.fromOffset(S.px, S.py)
+			S.f.Rotation = S.rot
+			S.f.TextTransparency = fade
+		end
+	end
+
+	shakeConn:Disconnect()
+	noiseConn:Disconnect()
+	waveConn:Disconnect()
+	stage.Position = UDim2.fromOffset(0, 0)
+	TweenService:Create(noise, TweenInfo.new(0.35), {TextTransparency = 1}):Play()
+	TweenService:Create(base, TweenInfo.new(0.35), {BackgroundTransparency = 1}):Play()
+	task.wait(0.4)
+	gui:Destroy()
+end
+
+----------------------------------------------------------------
+-- ASCII background for the main GUI window
+----------------------------------------------------------------
+local function injectAsciiBackground()
+	local roots = {CoreGui}
+	local okH, hid = pcall(function() return (gethui and gethui()) or (get_hidden_gui and get_hidden_gui()) end)
+	if okH and hid then table.insert(roots, 1, hid) end
+
+	-- find the window's content area (the Uhhhhhh UI starts a while after launch)
+	local content
+	local deadline = os.clock() + 300
+	while not content and os.clock() < deadline do
+		for _, root in ipairs(roots) do
+			for _, g in ipairs(root:GetChildren()) do
+				if g:IsA("ScreenGui") and g.DisplayOrder == 2147483647 and g ~= introGui then
+					for _, d in ipairs(g:GetDescendants()) do
+						if d:IsA("Frame") and d.ClipsDescendants
+							and d.Position == UDim2.new(0, 0, 0, 30)
+							and d.Size == UDim2.new(1, 0, 1, -35) then
+							content = d
+							break
+						end
+					end
+				end
+				if content then break end
+			end
+			if content then break end
+		end
+		if not content then task.wait(0.25) end
+	end
+	if not content then return end
+
+	local W, H = content.AbsoluteSize.X, content.AbsoluteSize.Y
+	if W < 50 then W = 360 end
+	if H < 50 then H = 205 end
+
+	-- logo watermark: the sparkle logo in ascii art
+	local logo = LOGO_SMALL
+	local logoCols, logoRows = #logo[1], #logo
+
+	local SIZE = 8
+	local cw, lh = asciiMetrics(SIZE)
+	local cols, rows = math.floor(W / cw), math.floor(H / lh)
+	while (cols < logoCols + 2 or rows < logoRows + 2) and SIZE > 5 do
+		SIZE -= 1
+		cw, lh = asciiMetrics(SIZE)
+		cols, rows = math.floor(W / cw), math.floor(H / lh)
+	end
+
+	local function mkLabel(z, trans)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1
+		l.BorderSizePixel = 0
+		l.Position = UDim2.fromOffset(0, 0)
+		l.Size = UDim2.fromScale(1, 1)
+		l.Font = ASCII_FONT
+		l.TextSize = SIZE
+		l.TextColor3 = Color3.new(1, 1, 1)
+		l.TextTransparency = trans
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextYAlignment = Enum.TextYAlignment.Top
+		l.TextWrapped = false
+		l.ZIndex = z
+		l.Interactable = false
+		l.Text = ""
+		l.Parent = content
+		return l
+	end
+	local plasma = mkLabel(-2, 0.88)
+	local logoLabel = mkLabel(-1, 0.6)
+
+	local row0 = math.max(0, math.floor((rows - logoRows) / 2))
+	local col0 = math.max(0, math.floor((cols - logoCols) / 2))
+	local logoLines = table.create(rows)
+	for y = 1, rows do
+		local r = y - 1 - row0
+		if r >= 0 and r < logoRows then
+			logoLines[y] = string.rep(" ", col0) .. logo[r + 1]
+		else
+			logoLines[y] = ""
+		end
+	end
+	logoLabel.Text = table.concat(logoLines, "\n")
+
+	-- keep the plasma out of the logo's shape (plus a 1 cell margin) so the logo stays clean
+	local blank = {}
+	for r = 0, logoRows - 1 do
+		local line = logo[r + 1]
+		for c = 0, logoCols - 1 do
+			if line:sub(c + 1, c + 1) ~= " " then
+				for dy = -1, 1 do
+					for dx = -1, 1 do
+						blank[(row0 + r + 1 + dy) * 256 + (col0 + c + 1 + dx)] = true
+					end
+				end
+			end
+		end
+	end
+
+	-- animated ascii plasma
+	local RAMP = " .:-=+*#"
+	local nramp = #RAMP
+	local mx, my = cols / 2, rows / 2
+	local acc = 0
+	local conn
+	conn = RunService.Heartbeat:Connect(function(dt)
+		if not plasma.Parent then
+			conn:Disconnect()
+			return
+		end
+		acc += dt
+		if acc < 1 / 12 then return end
+		acc = 0
+		if not content.Visible then return end
+
+		local t = os.clock() * 0.9
+		local lines = table.create(rows)
+		for y = 1, rows do
+			local row = table.create(cols)
+			for x = 1, cols do
+				local ch = " "
+				if not blank[y * 256 + x] then
+					local v = math.sin(x * 0.21 + t)
+						+ math.sin(y * 0.38 - t * 1.3)
+						+ math.sin((x + y) * 0.14 + t * 0.7)
+						+ math.sin(math.sqrt((x - mx) ^ 2 + ((y - my) * 2) ^ 2) * 0.22 - t * 1.1)
+					local idx = math.clamp(math.floor((v + 4) / 8 * nramp) + 1, 1, nramp)
+					ch = RAMP:sub(idx, idx)
+				end
+				row[x] = ch
+			end
+			lines[y] = table.concat(row)
+		end
+		plasma.Text = table.concat(lines, "\n")
+		logoLabel.TextTransparency = 0.62 + math.sin(os.clock() * 2) * 0.08
+	end)
+
+	-- make the opaque pages see-through so the ascii shows behind the UI
+	local function clearPages()
+		for _, c in ipairs(content:GetChildren()) do
+			if (c:IsA("Frame") or c:IsA("ScrollingFrame")) and c.BackgroundTransparency == 0 and c.ZIndex < 10 then
+				c.BackgroundTransparency = 1
+			end
+		end
+	end
+	clearPages()
+	content.ChildAdded:Connect(function()
+		task.defer(clearPages)
+		task.delay(0.1, clearPages)
+	end)
+	task.spawn(function()
+		while plasma.Parent do
+			task.wait(0.5)
+			clearPages()
+		end
+	end)
+end
+
+----------------------------------------------------------------
+-- Import buttons (bottom of the main page)
+----------------------------------------------------------------
+-- find a folder in the workspace root, ignoring upper/lower case
+local function findFolder(name)
+	local okDirect, direct = pcall(isfolder, name)
+	if okDirect and direct then return name end
+	local lower = name:lower()
+	local ok, list = pcall(listfiles, "")
+	if not ok or type(list) ~= "table" then
+		ok, list = pcall(listfiles, ".")
+	end
+	if ok and type(list) == "table" then
+		for _, p in ipairs(list) do
+			local n = p:match("([^/\\]+)$")
+			if n and n:lower() == lower then
+				local okF, isF = pcall(isfolder, p)
+				if okF and isF then return p end
+			end
+		end
+	end
+	return nil
+end
+
+-- copy everything from src into dst (sub folders too). Files that already exist are never overwritten.
+local function copyFolder(src, dst, stats)
+	if not isfolder(dst) then pcall(makefolder, dst) end
+	for _, path in ipairs(listfiles(src)) do
+		local name = path:match("([^/\\]+)$")
+		if name then
+			local target = dst .. "/" .. name
+			if isfolder(path) then
+				copyFolder(path, target, stats)
+			elseif isfile(target) then
+				stats.skipped += 1
+			else
+				local ok = pcall(function() writefile(target, readfile(path)) end)
+				if ok then stats.copied += 1 else stats.failed += 1 end
+				task.wait()
+			end
+		end
+	end
+end
+
+local function injectImportButtons()
+	local roots = {CoreGui}
+	local okH, hid = pcall(function() return (gethui and gethui()) or (get_hidden_gui and get_hidden_gui()) end)
+	if okH and hid then table.insert(roots, 1, hid) end
+
+	-- the main page is the one with the "Back to cool scene" button
+	local page
+	local deadline = os.clock() + 300
+	while not page and os.clock() < deadline do
+		for _, root in ipairs(roots) do
+			for _, g in ipairs(root:GetChildren()) do
+				if g:IsA("ScreenGui") and g.DisplayOrder == 2147483647 and g ~= introGui then
+					for _, d in ipairs(g:GetDescendants()) do
+						if d:IsA("TextLabel") and d.Text:find("Back to cool scene", 1, true) then
+							page = d:FindFirstAncestorWhichIsA("ScrollingFrame")
+							break
+						end
+					end
+				end
+				if page then break end
+			end
+			if page then break end
+		end
+		if not page then task.wait(0.5) end
+	end
+	if not page then return end
+
+	-- big layout orders keep everything at the very bottom, even if the script adds more items later
+	local function container(order, height)
+		local c = Instance.new("Frame")
+		c.Name = tostring(math.random(1000000, 9000000))
+		c.AnchorPoint = Vector2.new(0.5, 0)
+		c.Size = UDim2.new(1, 0, 0, height)
+		c.BackgroundTransparency = 1
+		c.BorderSizePixel = 0
+		c.LayoutOrder = order
+		c.Parent = page
+		return c
+	end
+
+	-- separator
+	local sepC = container(1000000, 7)
+	local sep = Instance.new("Frame")
+	sep.AnchorPoint = Vector2.new(0.5, 0.5)
+	sep.Position = UDim2.new(0.5, 0, 0.5, 0)
+	sep.Size = UDim2.new(1, -8, 0, 1)
+	sep.BackgroundColor3 = Color3.new(1, 1, 1)
+	sep.BackgroundTransparency = 0.8
+	sep.BorderSizePixel = 0
+	sep.Parent = sepC
+
+	-- small hint
+	local hintC = container(1000001, 32)
+	local hint = Instance.new("TextLabel")
+	hint.Position = UDim2.new(0, 5, 0, 0)
+	hint.Size = UDim2.new(1, -10, 1, 0)
+	hint.BackgroundTransparency = 1
+	hint.Font = Enum.Font.Code
+	hint.TextSize = 11
+	hint.TextColor3 = Color3.new(1, 1, 1)
+	hint.TextTransparency = 0.35
+	hint.TextWrapped = true
+	hint.Text = "Copies files into the " .. DATA_FOLDER .. " folder. Existing files are never overwritten. Restart the script afterwards."
+	hint.Parent = hintC
+
+	local busy = false
+	local function makeButton(order, text, folderName)
+		local c = container(order, 40)
+		local b = Instance.new("TextButton")
+		b.Position = UDim2.new(0, 5, 0, 5)
+		b.Size = UDim2.new(1, -10, 1, -10)
+		b.BackgroundColor3 = Color3.new(0, 0, 0)
+		b.BorderSizePixel = 0
+		b.AutoButtonColor = true
+		b.Font = Enum.Font.Code
+		b.TextSize = 15
+		b.TextColor3 = Color3.new(1, 1, 1)
+		b.Text = text
+		b.Parent = c
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 5)
+		corner.Parent = b
+		local stroke = Instance.new("UIStroke")
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Color = Color3.new(1, 1, 1)
+		stroke.Thickness = 1
+		stroke.Parent = b
+
+		b.Activated:Connect(function()
+			if busy then return end
+			busy = true
+			b.Text = "Working..."
+			local msg
+			local src = findFolder(folderName)
+			if not src then
+				msg = folderName .. " folder not found"
+			else
+				if not isfolder(DATA_FOLDER) then pcall(makefolder, DATA_FOLDER) end
+				local stats = {copied = 0, skipped = 0, failed = 0}
+				local ok, err = pcall(copyFolder, src, DATA_FOLDER, stats)
+				if ok then
+					msg = string.format("Copied %d, skipped %d", stats.copied, stats.skipped)
+					if stats.failed > 0 then msg ..= string.format(", failed %d", stats.failed) end
+				else
+					msg = "Import failed (see console)"
+					warn("[" .. TITLE .. "] import error: " .. tostring(err))
+				end
+			end
+			b.Text = msg
+			notify(msg)
+			task.wait(3.5)
+			b.Text = text
+			busy = false
+		end)
+		return b
+	end
+
+	makeButton(1000002, "Import from " .. SRC_UHHHHHH, SRC_UHHHHHH)
+	makeButton(1000003, "Import from " .. SRC_BLAABLAA, SRC_BLAABLAA)
+end
+
+----------------------------------------------------------------
+-- Download the Uhhhhhh fork while the loading screen plays
+----------------------------------------------------------------
+local src, fetchErr
+local fetched = false
+task.spawn(function()
+	local ok, res = pcall(function() return game:HttpGet(SOURCE_URL) end)
+	if ok and type(res) == "string" and #res > 1000 then
+		src = res
+	else
+		fetchErr = tostring(res)
+	end
+	fetched = true
+end)
+
+local introOk, introErr = pcall(playIntro)
+if not introOk then
+	warn("[" .. TITLE .. "] intro error: " .. tostring(introErr))
+	if introGui then pcall(function() introGui:Destroy() end) end
+end
+repeat task.wait() until fetched
+
+if not src then
+	_G.NOTuhhhhhhReanimationsLoaded = nil
+	notify("Couldn't download the script. Check your connection.")
+	warn("[" .. TITLE .. "] download failed: " .. tostring(fetchErr))
+	return
+end
+
+----------------------------------------------------------------
+-- Rename + skip the original intro (ours already played)
+----------------------------------------------------------------
+local function replaceAll(s, from, to)
+	local pat = from:gsub("%p", "%%%0")
+	local rep = to:gsub("%%", "%%%%")
+	return (s:gsub(pat, rep))
+end
+
+local PATCHES = {
+	-- own data folder instead of the original UhhhhhhReanim folder
+	{"UhhhhhhReanim", DATA_FOLDER},
+
+	{"SaveData.SkipIntro = not not SaveData.SkipIntro", "SaveData.SkipIntro = true"},
+	{"Uhhhhhh Reanimate (modded by awes955) | v", TITLE .. " | v"},
+	{"Uhhhhhh Reanimate (modded) V", TITLE .. " V"},
+	{"Uhhhhhh ( mod ) | v", TITLE .. " | v"},
+	{'Title = "Uhhhhhh"', 'Title = "' .. TITLE .. '"'},
+	{"(C) Uhhhhhh modded V", "(C) " .. TITLE .. " V"},
+	{"Uhhhhhh is waiting for the game to load", TITLE .. " is waiting for the game to load"},
+
+	-- "Monochrome" UI theme: white outlines/text on pure black, added to the theme list...
+	{'SndClick = "rbxassetid://86097124503088"},',
+		'SndClick = "rbxassetid://86097124503088"},\n\t\t-- Monochrome\n\t\t{Fore = Color3.new(1, 1, 1), Back = Color3.new(0, 0, 0), Text = Color3.new(1, 1, 1)},'},
+	-- ...and to the "UI Theme" dropdown (sits right before "User Defined")
+	{'"Tommorow Night 80s", -- my personal IDE theme',
+		'"Tommorow Night 80s", "Monochrome", -- my personal IDE theme'},
+	-- Monochrome is the default theme (switches once on first launch, after that your dropdown choice is kept)
+	{'SaveData.UITheme = SaveData.UITheme or 1',
+		'SaveData.UITheme = SaveData.UITheme or 18\nif not SaveData.NOTMonochromeApplied then SaveData.NOTMonochromeApplied = true SaveData.UITheme = 18 end'},
+	-- home screen: the sparkle logo replaces the triforce (gentle sway instead of spinning),
+	-- white particles, and no triangle-shaped particle pattern
+	{"local psc = Color3.new(1, 0.9, 0)", "local psc = Color3.new(1, 1, 1)"},
+	{"Util.MakeTriforce(3, Color3.new(1, 0.3, 0.3), 0)", "_G.NOTMakeLogo()"},
+	{"Triforce.Rotation = (Triforce.Rotation + trivel) % 360", "Triforce.Rotation = math.sin(t * 1.2) * 3"},
+	{"currentprocessor = math.random(1, #PositionProcessor)", "currentprocessor = math.random(1, 2)"},
+}
+
+for _, p in ipairs(PATCHES) do
+	src = replaceAll(src, p[1], p[2])
+end
+
+local fn, err = loadstring(src, "=" .. TITLE)
+if not fn then
+	_G.NOTuhhhhhhReanimationsLoaded = nil
+	notify("Script failed to compile, see console.")
+	warn("[" .. TITLE .. "] " .. tostring(err))
+	return
+end
+
+-- The sparkle logo for the home screen (it replaces the old triforce in the middle).
+-- The patched Uhhhhhh source calls this instead of Util.MakeTriforce.
+_G.NOTMakeLogo = function()
+	local LOGO = LOGO_SMALL
+	local lc, lr = #LOGO[1], #LOGO
+	local cw20, lh20 = asciiMetrics(20)
+	local size = math.clamp(math.floor(150 / (lr * (lh20 / 20))), 5, 14)
+	local cw, lh = asciiMetrics(size)
+
+	local pivot = Instance.new("Frame")
+	pivot.Name = tostring(math.random(1000000, 9000000))
+	pivot.AnchorPoint = Vector2.new(0.5, 0.5)
+	pivot.Position = UDim2.new(0.5, 0, 0.5, 0)
+	pivot.BackgroundTransparency = 1
+	pivot.BorderSizePixel = 0
+
+	local label = Instance.new("TextLabel")
+	label.AnchorPoint = Vector2.new(0.5, 0.5)
+	label.Position = UDim2.new(0.5, 0, 0.5, 0)
+	label.Size = UDim2.fromOffset(math.ceil(lc * cw) + 4, math.ceil(lr * lh))
+	label.BackgroundTransparency = 1
+	label.Font = ASCII_FONT
+	label.TextSize = size
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextYAlignment = Enum.TextYAlignment.Top
+	label.TextWrapped = false
+	label.Text = table.concat(LOGO, "\n")
+	label.Parent = pivot
+	return pivot
+end
+
+task.spawn(function()
+	local ok, e = pcall(injectAsciiBackground)
+	if not ok then warn("[" .. TITLE .. "] ascii background error: " .. tostring(e)) end
+end)
+
+task.spawn(function()
+	local ok, e = pcall(injectImportButtons)
+	if not ok then warn("[" .. TITLE .. "] import buttons error: " .. tostring(e)) end
+end)
+
+fn()
