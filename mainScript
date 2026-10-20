@@ -556,13 +556,52 @@ end
 -- Backgrounds: ASCII plasma (default), none, a .txt ascii art file, or an image
 --   <data folder>/Content/backgrounds/   (also accepted: "background", "background grounds")
 ----------------------------------------------------------------
-local BG_PLASMA, BG_NONE = "ASCII Plasma (default)", "None"
+local BG_PATTERN, BG_PLASMA, BG_NONE = "Monochrome Pattern", "ASCII Plasma", "None"
 local BG_FOLDER_KEYS = {backgrounds = true, background = true, backgroundgrounds = true}
 local BG_IMAGE_EXT = {png = true, jpg = true, jpeg = true, webp = true, bmp = true}
 local getAsset = getcustomasset or getsynasset
 local BG_SAVE_FILE = DATA_FOLDER .. "/NOTbackground.txt"
 
-local BG = {current = BG_PLASMA, byName = {}, names = {BG_PLASMA, BG_NONE}, apply = nil}
+local BG = {current = BG_PATTERN, byName = {}, names = {BG_PATTERN, BG_PLASMA, BG_NONE}, apply = nil}
+
+-- The starburst pattern (your image) as a small 128x128 tile, embedded as base64.
+-- It is written to the data folder once and loaded with getcustomasset.
+local PATTERN_FILE = DATA_FOLDER .. "/NOTpattern_v1.png"
+local PATTERN_B64 = "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"
+
+local B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local B64_LOOKUP = {}
+for i = 1, #B64_CHARS do B64_LOOKUP[B64_CHARS:byte(i)] = i - 1 end
+
+local function base64Decode(data)
+	local out, buf, bits = {}, 0, 0
+	for i = 1, #data do
+		local v = B64_LOOKUP[data:byte(i)]
+		if v then
+			buf = buf * 64 + v
+			bits += 6
+			if bits >= 8 then
+				bits -= 8
+				local byte = math.floor(buf / 2 ^ bits)
+				buf = buf % 2 ^ bits
+				out[#out + 1] = string.char(byte)
+			end
+		end
+	end
+	return table.concat(out)
+end
+
+local function patternAsset()
+	local ok, asset = pcall(function()
+		pcall(makefolder, DATA_FOLDER)
+		if not isfile(PATTERN_FILE) then
+			writefile(PATTERN_FILE, base64Decode(PATTERN_B64))
+		end
+		return getcustomasset and getcustomasset(PATTERN_FILE) or getsynasset(PATTERN_FILE)
+	end)
+	if ok and asset and asset ~= "" then return asset end
+	return nil
+end
 
 -- remember the last choice
 do
@@ -572,6 +611,7 @@ do
 	end)
 	if ok and type(saved) == "string" then
 		saved = saved:gsub("[\r\n]+", "")
+		if saved == "ASCII Plasma (default)" then saved = BG_PLASMA end
 		if #saved > 0 then BG.current = saved end
 	end
 end
@@ -583,7 +623,7 @@ end
 -- lists the backgrounds. With create = true the folder is made when it doesn't exist yet.
 function BG.scan(create)
 	local base = DATA_FOLDER .. "/Content"
-	local names, byName = {BG_PLASMA, BG_NONE}, {}
+	local names, byName = {BG_PATTERN, BG_PLASMA, BG_NONE}, {}
 	local foundFolder = false
 	local okL, list = pcall(listfiles, base)
 	if okL and type(list) == "table" then
@@ -1148,6 +1188,28 @@ local function injectAsciiBackground()
 	textBg.Text = ""
 	textBg.Parent = content
 
+	-- tiled starburst pattern that slowly drifts diagonally
+	local PATTERN_TILE = 80
+	local patternBg = Instance.new("ImageLabel")
+	patternBg.BackgroundTransparency = 1
+	patternBg.BorderSizePixel = 0
+	patternBg.Position = UDim2.fromOffset(0, 0)
+	patternBg.Size = UDim2.new(1, PATTERN_TILE, 1, PATTERN_TILE)
+	patternBg.ScaleType = Enum.ScaleType.Tile
+	patternBg.TileSize = UDim2.fromOffset(PATTERN_TILE, PATTERN_TILE)
+	patternBg.ImageColor3 = Color3.new(1, 1, 1)
+	patternBg.ImageTransparency = 0.84
+	patternBg.ZIndex = -2
+	patternBg.Interactable = false
+	patternBg.Visible = false
+	patternBg.Parent = content
+	RunService.Heartbeat:Connect(function()
+		if patternBg.Visible and content.Visible then
+			local off = (os.clock() * 10) % PATTERN_TILE
+			patternBg.Position = UDim2.fromOffset(-off, -off)
+		end
+	end)
+
 	local imageBg = Instance.new("ImageLabel")
 	imageBg.BackgroundTransparency = 1
 	imageBg.BorderSizePixel = 0
@@ -1185,16 +1247,25 @@ local function injectAsciiBackground()
 
 	local function applyBackground()
 		local name = BG.current
-		local kind = "plasma"
+		local kind = "pattern"
 		local entry = nil
 		if name == BG_NONE then
 			kind = "none"
-		elseif name ~= BG_PLASMA then
+		elseif name == BG_PLASMA then
+			kind = "plasma"
+		elseif name ~= BG_PATTERN then
 			entry = BG.byName[name]
 			if entry then kind = entry.kind end
 		end
 
-		if kind == "text" then
+		if kind == "pattern" then
+			local asset = patternAsset()
+			if asset then
+				patternBg.Image = asset
+			else
+				kind = "plasma"
+			end
+		elseif kind == "text" then
 			local ok, txt = pcall(readfile, entry.path)
 			if ok and type(txt) == "string" then
 				showText(txt)
@@ -1214,6 +1285,7 @@ local function injectAsciiBackground()
 		logoLabel.Visible = kind == "plasma"
 		textBg.Visible = kind == "text"
 		imageBg.Visible = kind == "image"
+		patternBg.Visible = kind == "pattern"
 	end
 	BG.apply = applyBackground
 	BG.scan(false)
@@ -1276,6 +1348,7 @@ local function injectAsciiBackground()
 			plasma.TextColor3 = ref.TextColor3
 			logoLabel.TextColor3 = ref.TextColor3
 			textBg.TextColor3 = ref.TextColor3
+			patternBg.ImageColor3 = ref.TextColor3
 			if mainPage and mainPage.BackgroundTransparency ~= 1 then
 				mainPage.BackgroundTransparency = 1
 			end
