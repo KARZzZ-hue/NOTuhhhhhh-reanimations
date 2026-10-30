@@ -36,6 +36,19 @@ local SRC_BLAABLAA = "BlaablaaReanim"
 -- the explosion flickers a lot. Set to true for a calmer one (slower, dimmer flicker).
 local REDUCE_FLASHING = false
 
+local VERSION = "2.0"
+
+-- intro style: Full / Short / Off (changed in Config > Interface, applies on the next start)
+local INTRO_FILE = DATA_FOLDER .. "/NOTintro.txt"
+local INTRO_STYLES = {"Full", "Short", "Off"}
+local INTRO_STYLE = "Full"
+pcall(function()
+	if isfile(INTRO_FILE) then
+		local v = readfile(INTRO_FILE):gsub("%s+", "")
+		if table.find(INTRO_STYLES, v) then INTRO_STYLE = v end
+	end
+end)
+
 local cloneref = cloneref or function(o) return o end
 local TweenService = cloneref(game:GetService("TweenService"))
 local RunService = cloneref(game:GetService("RunService"))
@@ -121,12 +134,14 @@ local function asciiMetrics(size)
 end
 
 ----------------------------------------------------------------
--- Loading screen (black & white ASCII logo: grows in, waves, explodes into static)
+-- Loading screen: a black & white cutscene (letterbox, glowing lines on the beat, captions,
+-- the ASCII logo grows in, waves, charges up and explodes into static)
 ----------------------------------------------------------------
 local introGui
 local introConns = {}
 
 local function playIntro()
+	if INTRO_STYLE == "Off" then return end
 	repeat task.wait() until workspace.CurrentCamera
 	local vp = workspace.CurrentCamera.ViewportSize
 	local cx, cy = vp.X / 2, vp.Y / 2
@@ -201,19 +216,23 @@ local function playIntro()
 
 	-- everything that shakes lives in here
 	local stage = Instance.new("Frame")
+	stage.AnchorPoint = Vector2.new(0.5, 0.5)
+	stage.Position = UDim2.fromScale(0.5, 0.5)
 	stage.Size = UDim2.fromScale(1, 1)
 	stage.BackgroundTransparency = 1
 	stage.BorderSizePixel = 0
 	stage.ZIndex = 3
 	stage.Parent = gui
+	local camScale = Instance.new("UIScale") -- slow camera push
+	camScale.Parent = stage
 
 	local shake = 0
 	local shakeConn = RunService.Heartbeat:Connect(function(dt)
 		shake *= math.exp(-9 * dt)
 		if shake < 0.3 then
-			stage.Position = UDim2.fromOffset(0, 0)
+			stage.Position = UDim2.fromScale(0.5, 0.5)
 		else
-			stage.Position = UDim2.fromOffset((math.random() * 2 - 1) * shake, (math.random() * 2 - 1) * shake)
+			stage.Position = UDim2.new(0.5, (math.random() * 2 - 1) * shake, 0.5, (math.random() * 2 - 1) * shake)
 		end
 	end)
 
@@ -229,8 +248,9 @@ local function playIntro()
 	skipBtn.Activated:Connect(function() skipped = true end)
 
 	local skipHint = Instance.new("TextLabel")
-	skipHint.AnchorPoint = Vector2.new(0.5, 1)
-	skipHint.Position = UDim2.new(0.5, 0, 1, -12)
+	skipHint.AnchorPoint = Vector2.new(1, 1)
+	skipHint.Position = UDim2.new(1, -14, 1, -9)
+	skipHint.TextXAlignment = Enum.TextXAlignment.Right
 	skipHint.Size = UDim2.fromOffset(200, 20)
 	skipHint.BackgroundTransparency = 1
 	skipHint.Font = ASCII_FONT
@@ -394,9 +414,238 @@ local function playIntro()
 	table.insert(introConns, shakeConn)
 	table.insert(introConns, waveConn)
 
+	----------------------------------------------------------------
+	-- cutscene layer: letterbox bars, glowing edge lines that move to the beat,
+	-- a REC/timecode strip, typed captions, light sweeps between scenes
+	----------------------------------------------------------------
+	local BPM = 124 -- the beat the lines move to (the intro has no music, so this is its own metronome)
+	local BLACK = Color3.new(0, 0, 0)
+	local beatEnv, beatIndex = 0, -1
+	local lineBoost = 1
+	local barH = math.floor(vp.Y * 0.09)
+	local barCur, barTarget = 0, barH
+	local edgeA, edgeTarget = 0, 1
+	local pulseAmp = REDUCE_FLASHING and 0.4 or 1
+	local fxNoisePulse = true
+	local captionDone = false
+	local introStart = os.clock()
+	local TS = (INTRO_STYLE == "Short") and 0.55 or 1
+
+	-- not shaken, above the logo
+	local fxRoot = Instance.new("Frame")
+	fxRoot.Size = UDim2.fromScale(1, 1)
+	fxRoot.BackgroundTransparency = 1
+	fxRoot.BorderSizePixel = 0
+	fxRoot.ZIndex = 8
+	fxRoot.Parent = gui
+
+	local function fxFrame(color, z)
+		local f = Instance.new("Frame")
+		f.BackgroundColor3 = color
+		f.BorderSizePixel = 0
+		f.ZIndex = z
+		f.Parent = fxRoot
+		return f
+	end
+	local function fxLabel(anchorX, text, align)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1
+		l.Font = ASCII_FONT
+		l.TextSize = 13
+		l.TextColor3 = WHITE
+		l.TextXAlignment = align
+		l.AnchorPoint = Vector2.new(anchorX, 0.5)
+		l.Size = UDim2.fromOffset(300, 18)
+		l.Text = text
+		l.ZIndex = 5
+		l.Visible = false
+		l.Parent = fxRoot
+		return l
+	end
+
+	-- letterbox bars
+	local barTop = fxFrame(BLACK, 1)
+	local barBot = fxFrame(BLACK, 1)
+	barBot.AnchorPoint = Vector2.new(0, 1)
+	barBot.Position = UDim2.fromScale(0, 1)
+
+	-- soft glow bands behind the lines (bright in the middle for top/bottom, bright at the edge for the sides)
+	local GLOW = 34
+	local function glowBand(rotation, seq)
+		local f = fxFrame(WHITE, 2)
+		f.BackgroundTransparency = 0.5
+		local g = Instance.new("UIGradient")
+		g.Rotation = rotation
+		g.Transparency = seq
+		g.Parent = f
+		return f
+	end
+	local NSK = NumberSequenceKeypoint.new
+	local midGlow = NumberSequence.new({NSK(0, 1), NSK(0.5, 0.35), NSK(1, 1)})
+	local topGlow = glowBand(90, midGlow)
+	local botGlow = glowBand(90, midGlow)
+	local leftGlow = glowBand(0, NumberSequence.new({NSK(0, 0.35), NSK(1, 1)}))
+	local rightGlow = glowBand(0, NumberSequence.new({NSK(0, 1), NSK(1, 0.35)}))
+	leftGlow.Position, leftGlow.Size = UDim2.fromOffset(0, 0), UDim2.new(0, GLOW, 1, 0)
+	rightGlow.Position, rightGlow.Size = UDim2.new(1, -GLOW, 0, 0), UDim2.new(0, GLOW, 1, 0)
+
+	-- the bright core lines
+	local topLine, botLine = fxFrame(WHITE, 3), fxFrame(WHITE, 3)
+	local leftLine, rightLine = fxFrame(WHITE, 3), fxFrame(WHITE, 3)
+
+	-- bright dashes that race along each line and surge on every beat
+	local function makeSegments(count, length)
+		local list = {}
+		for i = 1, count do
+			local f = fxFrame(WHITE, 4)
+			local s = Instance.new("UIStroke")
+			s.Color = WHITE
+			s.Thickness = 3
+			s.Transparency = 0.65
+			s.Parent = f
+			local len = math.random(40, 140)
+			list[i] = {f = f, stroke = s, len = len, u = math.random() * (length + len), k = 0.7 + math.random() * 0.6}
+		end
+		return list
+	end
+	local topSegs, botSegs = makeSegments(6, vp.X), makeSegments(6, vp.X)
+	local leftSegs, rightSegs = makeSegments(5, vp.Y), makeSegments(5, vp.Y)
+
+	-- REC light, timecode and captions live in the bars
+	local recLabel = fxLabel(0, "[*] REC", Enum.TextXAlignment.Left)
+	local timeLabel = fxLabel(1, "00:00:00", Enum.TextXAlignment.Right)
+	local captionLabel = fxLabel(0, "", Enum.TextXAlignment.Left)
+	captionLabel.Size = UDim2.fromOffset(math.max(200, vp.X - 200), 18)
+
+	-- the engine: beat clock, bars, lines, labels, slow camera push
+	local fxConn = RunService.Heartbeat:Connect(function(dt)
+		local now = os.clock() - introStart
+
+		-- beat clock: sharp hit on every beat that fades out, every 4th beat is an accent
+		local bp = now * BPM / 60
+		local idx = math.floor(bp)
+		beatEnv = (1 - (bp - idx)) ^ 3
+		if idx ~= beatIndex then
+			beatIndex = idx
+			local accent = (idx % 4 == 0)
+			shake = math.max(shake, (accent and 5 or 2) * pulseAmp)
+		end
+
+		barCur += (barTarget - barCur) * math.min(1, dt * 5)
+		edgeA += (edgeTarget - edgeA) * math.min(1, dt * 3)
+
+		local pulse = beatEnv * pulseAmp
+		local th = 2 + 3 * pulse + (lineBoost - 1) * 0.8
+		local segTh = th * 1.6 + 1
+		local speed = (90 + 650 * pulse) * lineBoost
+		local topY, botY = barCur, vp.Y - barCur
+		local lineT = 1 - edgeA
+		local bandT = 1 - edgeA * (0.5 + 0.5 * pulse)
+		local strokeT = 1 - 0.35 * edgeA
+
+		barTop.Size = UDim2.new(1, 0, 0, barCur)
+		barBot.Size = UDim2.new(1, 0, 0, barCur)
+
+		topLine.BackgroundTransparency, botLine.BackgroundTransparency = lineT, lineT
+		leftLine.BackgroundTransparency, rightLine.BackgroundTransparency = lineT, lineT
+		topLine.Position, topLine.Size = UDim2.fromOffset(0, topY - th / 2), UDim2.new(1, 0, 0, th)
+		botLine.Position, botLine.Size = UDim2.fromOffset(0, botY - th / 2), UDim2.new(1, 0, 0, th)
+		leftLine.Position, leftLine.Size = UDim2.fromOffset(0, 0), UDim2.new(0, th, 1, 0)
+		rightLine.Position, rightLine.Size = UDim2.new(1, -th, 0, 0), UDim2.new(0, th, 1, 0)
+
+		for _, g in ipairs({topGlow, botGlow, leftGlow, rightGlow}) do
+			g.BackgroundTransparency = bandT
+		end
+		topGlow.Position, topGlow.Size = UDim2.fromOffset(0, topY - GLOW), UDim2.new(1, 0, 0, GLOW * 2)
+		botGlow.Position, botGlow.Size = UDim2.fromOffset(0, botY - GLOW), UDim2.new(1, 0, 0, GLOW * 2)
+
+		for _, s in ipairs(topSegs) do
+			s.u = (s.u + speed * s.k * dt) % (vp.X + s.len)
+			s.f.Size = UDim2.fromOffset(s.len, segTh)
+			s.f.Position = UDim2.fromOffset(s.u - s.len, topY - segTh / 2)
+			s.f.BackgroundTransparency, s.stroke.Transparency = lineT, strokeT
+		end
+		for _, s in ipairs(botSegs) do
+			s.u = (s.u - speed * s.k * dt) % (vp.X + s.len)
+			s.f.Size = UDim2.fromOffset(s.len, segTh)
+			s.f.Position = UDim2.fromOffset(s.u - s.len, botY - segTh / 2)
+			s.f.BackgroundTransparency, s.stroke.Transparency = lineT, strokeT
+		end
+		for _, s in ipairs(leftSegs) do
+			s.u = (s.u - speed * s.k * dt) % (vp.Y + s.len)
+			s.f.Size = UDim2.fromOffset(segTh, s.len)
+			s.f.Position = UDim2.fromOffset(0, s.u - s.len)
+			s.f.BackgroundTransparency, s.stroke.Transparency = lineT, strokeT
+		end
+		for _, s in ipairs(rightSegs) do
+			s.u = (s.u + speed * s.k * dt) % (vp.Y + s.len)
+			s.f.Size = UDim2.fromOffset(segTh, s.len)
+			s.f.Position = UDim2.fromOffset(vp.X - segTh, s.u - s.len)
+			s.f.BackgroundTransparency, s.stroke.Transparency = lineT, strokeT
+		end
+
+		-- labels sit in the middle of the bars
+		local showLabels = barCur > 18
+		recLabel.Visible, timeLabel.Visible, captionLabel.Visible = showLabels, showLabels, showLabels
+		if showLabels then
+			recLabel.Position = UDim2.fromOffset(14, barCur / 2)
+			timeLabel.Position = UDim2.fromOffset(vp.X - 14, barCur / 2)
+			captionLabel.Position = UDim2.fromOffset(14, vp.Y - barCur / 2)
+			recLabel.TextTransparency = (idx % 2 == 0) and 0 or 0.7
+			timeLabel.Text = string.format("%02d:%02d:%02d", math.floor(now / 60), math.floor(now % 60), math.floor((now % 1) * 24))
+		end
+
+		-- slow camera push over the whole intro and the static breathing with the beat
+		camScale.Scale = 1 + 0.06 * math.clamp(now / 9, 0, 1)
+		if fxNoisePulse and now > 0.6 then
+			noise.TextTransparency = 0.92 - 0.05 * pulse
+		end
+	end)
+	table.insert(introConns, fxConn)
+
+	-- typed captions, like a cutscene's subtitles
+	local CAPTIONS = {
+		{0.4, "> booting reanimation core"},
+		{2.2, "> syncing client root / server root"},
+		{4.4, "> NOTUHHHHHH ONLINE"},
+		{6.4, "> detonating intro..."},
+	}
+	task.spawn(function()
+		for _, c in ipairs(CAPTIONS) do
+			while not captionDone and (os.clock() - introStart) < c[1] * TS do
+				task.wait(0.05)
+			end
+			if captionDone then return end
+			for i = 1, #c[2] do
+				if captionDone then return end
+				captionLabel.Text = c[2]:sub(1, i) .. "_"
+				task.wait(0.025)
+			end
+			captionLabel.Text = c[2]
+		end
+	end)
+
+	-- a bright line sweeps across the screen at every scene cut
+	local function sweep()
+		if REDUCE_FLASHING then return end
+		local f = fxFrame(WHITE, 6)
+		f.Size = UDim2.new(0, 3, 1, 0)
+		f.Position = UDim2.fromOffset(-40, 0)
+		local s = Instance.new("UIStroke")
+		s.Color = WHITE
+		s.Thickness = 6
+		s.Transparency = 0.6
+		s.Parent = f
+		TweenService:Create(f, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {
+			Position = UDim2.fromOffset(vp.X + 40, 0),
+		}):Play()
+		task.delay(0.6, function() f:Destroy() end)
+	end
+	sweep()
+
 	-- 1) GROW: the logo grows into the screen from a tiny size, fading in from the middle outwards
 	waving, scramP = true, 1
-	local GROW = 1.7
+	local GROW = (INTRO_STYLE == "Short") and 0.9 or 1.7
 	local t0 = os.clock()
 	while true do
 		RunService.Heartbeat:Wait()
@@ -417,21 +666,24 @@ local function playIntro()
 	for _, L in ipairs(flyers) do L.label.TextTransparency = 0 end
 
 	-- 2) HOLD: the wave keeps rolling, the logo breathes a little
-	local HOLD = 1.6
+	local HOLD = (INTRO_STYLE == "Short") and 0.2 or 1.6
+	lineBoost = 1.4
 	t0 = os.clock()
 	while os.clock() - t0 < HOLD and not skipped do
 		RunService.Heartbeat:Wait()
-		grow.Scale = 1 + 0.015 * math.sin((os.clock() - t0) * 3)
+		grow.Scale = 1 + 0.015 * math.sin((os.clock() - t0) * 3) + 0.03 * beatEnv
 	end
 
 	-- 3) CHARGE: the wave gets faster and taller, the ascii corrupts, the screen shakes
-	local CHARGE = 0.9
+	local CHARGE = (INTRO_STYLE == "Short") and 0.5 or 0.9
+	sweep()
 	t0 = os.clock()
 	while true do
 		RunService.Heartbeat:Wait()
 		local k = (os.clock() - t0) / CHARGE
 		if k >= 1 or skipped then break end
-		grow.Scale = 1 + 0.08 * k
+		grow.Scale = 1 + 0.08 * k + 0.03 * beatEnv
+		lineBoost = 1.5 + 2.5 * k
 		waveAmp = waveBase * (1 + k)
 		waveSpeed = 3 + k * 7
 		jit = 1 + k * 7
@@ -445,6 +697,9 @@ local function playIntro()
 	scramP, jit = 0, 0
 	grow.Scale = 1
 	shake = 30
+	lineBoost = 5
+	barTarget = 0
+	fxNoisePulse = false
 
 	local flash = Instance.new("Frame")
 	flash.Size = UDim2.fromScale(1, 1)
@@ -506,6 +761,7 @@ local function playIntro()
 		local el = os.clock() - start
 		if el > BOOM_TIME or skipped then break end
 		local fade = math.clamp((el - 0.7) / 0.9, 0, 1)
+		lineBoost = math.max(1, 5 - el * 3)
 
 		-- flicker the static during the blast, then let it settle back to the dim background
 		if el < 0.9 then
@@ -541,28 +797,56 @@ local function playIntro()
 	shakeConn:Disconnect()
 	noiseConn:Disconnect()
 	waveConn:Disconnect()
-	stage.Position = UDim2.fromOffset(0, 0)
+	stage.Position = UDim2.fromScale(0.5, 0.5)
 	skipHint.Visible = false
+	edgeTarget = 0
+	barTarget = 0
+	captionDone = true
 	for _, L in ipairs(flyers) do
 		TweenService:Create(L.label, TweenInfo.new(0.3), {TextTransparency = 1}):Play()
 	end
 	TweenService:Create(noise, TweenInfo.new(0.35), {TextTransparency = 1}):Play()
 	TweenService:Create(base, TweenInfo.new(0.35), {BackgroundTransparency = 1}):Play()
 	task.wait(0.4)
+	fxConn:Disconnect()
 	gui:Destroy()
 end
 
 ----------------------------------------------------------------
--- Backgrounds: ASCII plasma (default), none, a .txt ascii art file, or an image
+-- Backgrounds: starburst pattern (default), animated ASCII scenes, ASCII plasma, none,
+-- a .txt ascii art file, or an image
 --   <data folder>/Content/backgrounds/   (also accepted: "background", "background grounds")
 ----------------------------------------------------------------
 local BG_PATTERN, BG_PLASMA, BG_NONE = "Monochrome Pattern", "ASCII Plasma", "None"
+local BG_SCENE_NAMES = {"Matrix Rain", "Starfield", "Waves", "Fire", "Music Visualizer"}
 local BG_FOLDER_KEYS = {backgrounds = true, background = true, backgroundgrounds = true}
 local BG_IMAGE_EXT = {png = true, jpg = true, jpeg = true, webp = true, bmp = true}
 local getAsset = getcustomasset or getsynasset
 local BG_SAVE_FILE = DATA_FOLDER .. "/NOTbackground.txt"
 
-local BG = {current = BG_PATTERN, byName = {}, names = {BG_PATTERN, BG_PLASMA, BG_NONE}, apply = nil}
+-- how the backgrounds look (saved with the other settings once the Config page exists)
+local BG_CFG_DEFAULTS = {
+	PatternAlpha = 0.84, PatternSpeed = 10, PatternTile = 80,
+	SceneAlpha = 0.8, SceneFPS = 12,
+}
+
+local function copyTable(t)
+	local c = {}
+	for k, v in pairs(t) do c[k] = v end
+	return c
+end
+
+local function baseBackgroundNames()
+	local names = {BG_PATTERN, BG_PLASMA}
+	for _, n in ipairs(BG_SCENE_NAMES) do table.insert(names, n) end
+	table.insert(names, BG_NONE)
+	return names
+end
+
+local BG = {
+	current = BG_PATTERN, byName = {}, names = baseBackgroundNames(),
+	apply = nil, uiSound = nil, cfg = copyTable(BG_CFG_DEFAULTS),
+}
 
 -- The starburst pattern (your image) as a small 128x128 tile, embedded as base64.
 -- It is written to the data folder once and loaded with getcustomasset.
@@ -623,7 +907,7 @@ end
 -- lists the backgrounds. With create = true the folder is made when it doesn't exist yet.
 function BG.scan(create)
 	local base = DATA_FOLDER .. "/Content"
-	local names, byName = {BG_PATTERN, BG_PLASMA, BG_NONE}, {}
+	local names, byName = baseBackgroundNames(), {}
 	local foundFolder = false
 	local okL, list = pcall(listfiles, base)
 	if okL and type(list) == "table" then
@@ -683,9 +967,231 @@ _G.NOTCreateBackgroundUI = function(UI, MainPage)
 end
 
 ----------------------------------------------------------------
--- Config page: "Moveset configs" (trail) and "Dancing configs" (ghost fills)
+-- Animated ASCII scenes (they draw into a grid of characters)
+----------------------------------------------------------------
+local SCENES = {}
+
+local function newGrid(cols, rows, fill)
+	local g = table.create(rows)
+	for y = 1, rows do
+		local row = table.create(cols)
+		for x = 1, cols do row[x] = fill end
+		g[y] = row
+	end
+	return g
+end
+
+local function gridToString(g, rows)
+	local lines = table.create(rows)
+	for y = 1, rows do lines[y] = table.concat(g[y]) end
+	return table.concat(lines, "\n")
+end
+
+-- falling green-rain style columns
+SCENES["Matrix Rain"] = {
+	new = function(cols, rows)
+		local st = {cols = cols, rows = rows, heads = {}, speeds = {}, lens = {}}
+		for x = 1, cols do
+			st.heads[x] = math.random() * rows * 1.5 - rows * 0.5
+			st.speeds[x] = 4 + math.random() * 10
+			st.lens[x] = math.random(5, math.max(6, math.floor(rows * 0.8)))
+		end
+		return st
+	end,
+	render = function(st, t, dt)
+		local cols, rows = st.cols, st.rows
+		local glyphs = "01ABCDEFGHIJKLMNOPQRSTUVWXYZ$#@%&*+=<>"
+		local ramp = "@#*+=-:."
+		local g = newGrid(cols, rows, " ")
+		for x = 1, cols do
+			local head = st.heads[x] + st.speeds[x] * dt
+			if head - st.lens[x] > rows then
+				head = -math.random(0, rows)
+				st.speeds[x] = 4 + math.random() * 10
+				st.lens[x] = math.random(5, math.max(6, math.floor(rows * 0.8)))
+			end
+			st.heads[x] = head
+			local len = st.lens[x]
+			for d = 0, len do
+				local y = math.floor(head) - d
+				if y >= 1 and y <= rows then
+					if d == 0 then
+						local k = math.random(#glyphs)
+						g[y][x] = glyphs:sub(k, k)
+					else
+						local ri = math.min(#ramp, 1 + math.floor(d / len * #ramp))
+						g[y][x] = ramp:sub(ri, ri)
+					end
+				end
+			end
+		end
+		return gridToString(g, rows)
+	end,
+}
+
+-- flying through stars
+SCENES["Starfield"] = {
+	new = function(cols, rows)
+		local st = {cols = cols, rows = rows, stars = {}}
+		for i = 1, math.max(30, math.floor(cols * rows / 40)) do
+			st.stars[i] = {x = math.random() * 2 - 1, y = math.random() * 2 - 1, z = math.random()}
+		end
+		return st
+	end,
+	render = function(st, t, dt)
+		local cols, rows = st.cols, st.rows
+		local g = newGrid(cols, rows, " ")
+		for _, s in ipairs(st.stars) do
+			s.z -= dt * 0.35
+			if s.z <= 0.02 then
+				s.x, s.y, s.z = math.random() * 2 - 1, math.random() * 2 - 1, 1
+			end
+			local px = math.floor(cols / 2 + (s.x / s.z) * cols * 0.25)
+			local py = math.floor(rows / 2 + (s.y / s.z) * rows * 0.25)
+			if px >= 1 and px <= cols and py >= 1 and py <= rows then
+				local ch = "."
+				if s.z < 0.12 then
+					ch = "@"
+				elseif s.z < 0.33 then
+					ch = "*"
+				elseif s.z < 0.66 then
+					ch = "+"
+				end
+				g[py][px] = ch
+			end
+		end
+		return gridToString(g, rows)
+	end,
+}
+
+-- two layers of rolling waves
+SCENES["Waves"] = {
+	new = function(cols, rows) return {cols = cols, rows = rows} end,
+	render = function(st, t)
+		local cols, rows = st.cols, st.rows
+		local g = newGrid(cols, rows, " ")
+		for x = 1, cols do
+			local h1 = rows * 0.5 + math.sin(x * 0.18 + t * 1.4) * rows * 0.12 + math.sin(x * 0.07 - t * 0.9) * rows * 0.08
+			local h2 = rows * 0.72 + math.sin(x * 0.22 - t * 1.1) * rows * 0.07
+			local s1, s2 = math.floor(h1 + 0.5), math.floor(h2 + 0.5)
+			for y = 1, rows do
+				local ch = " "
+				if y == s1 then
+					ch = "~"
+				elseif y > s1 and y < s2 then
+					ch = ((x + y) % 4 == 0) and "." or " "
+				elseif y == s2 then
+					ch = "="
+				elseif y > s2 then
+					ch = ((x + y) % 2 == 0) and ":" or "."
+				end
+				g[y][x] = ch
+			end
+		end
+		return gridToString(g, rows)
+	end,
+}
+
+-- classic ascii fire
+SCENES["Fire"] = {
+	new = function(cols, rows)
+		local heat = table.create(rows + 2)
+		for y = 1, rows + 2 do
+			heat[y] = table.create(cols)
+			for x = 1, cols do heat[y][x] = 0 end
+		end
+		return {cols = cols, rows = rows, heat = heat}
+	end,
+	render = function(st, t, dt)
+		local cols, rows, heat = st.cols, st.rows, st.heat
+		for x = 1, cols do
+			heat[rows + 1][x] = (math.random() < 0.65) and math.random(160, 255) or 0
+			heat[rows + 2][x] = 0
+		end
+		for y = 1, rows do
+			for x = 1, cols do
+				local l = heat[y + 1][math.max(1, x - 1)]
+				local r = heat[y + 1][math.min(cols, x + 1)]
+				local b1 = heat[y + 1][x]
+				local b2 = heat[y + 2][x]
+				local v = (l + r + b1 + b2) / 4 * 0.93 - 0.5
+				heat[y][x] = (v > 0) and v or 0
+			end
+		end
+		local ramp = " .:^*sS#$@"
+		local g = newGrid(cols, rows, " ")
+		for y = 1, rows do
+			for x = 1, cols do
+				local idx = math.clamp(math.floor(heat[y][x] / 256 * #ramp) + 1, 1, #ramp)
+				g[y][x] = ramp:sub(idx, idx)
+			end
+		end
+		return gridToString(g, rows)
+	end,
+}
+
+-- bars that jump with the music (idles with a gentle wave when nothing plays)
+SCENES["Music Visualizer"] = {
+	new = function(cols, rows)
+		local bars = math.max(8, math.floor(cols / 3))
+		local st = {cols = cols, rows = rows, bars = bars, level = {}, phase = {}}
+		for i = 1, bars do
+			st.level[i] = 0
+			st.phase[i] = math.random() * 6.28
+		end
+		return st
+	end,
+	render = function(st, t, dt, loud)
+		local cols, rows, bars = st.cols, st.rows, st.bars
+		local amp = math.clamp((loud or 0) / 400, 0, 1)
+		local idle = 0.12
+		local g = newGrid(cols, rows, " ")
+		for i = 1, bars do
+			local wave = math.abs(math.sin(t * 3 + st.phase[i] + i * 0.5))
+			local target = math.max(idle * (0.4 + 0.6 * wave), amp * (0.3 + 0.7 * wave))
+			st.level[i] += (target - st.level[i]) * math.min(1, dt * 10)
+			local height = math.floor(st.level[i] * rows)
+			local x0 = (i - 1) * 3 + 1
+			for y = rows, rows - height + 1, -1 do
+				if y >= 1 then
+					local ch = (y == rows - height + 1) and "=" or "#"
+					for dx = 0, 1 do
+						if x0 + dx <= cols then g[y][x0 + dx] = ch end
+					end
+				end
+			end
+		end
+		return gridToString(g, rows)
+	end,
+}
+
+-- loudness of whatever music the script is playing right now
+local function musicLoudness()
+	local us = BG.uiSound
+	if not us then return 0 end
+	local best = 0
+	local function consider(k, v)
+		if typeof(v) == "Instance" and v:IsA("Sound") and v.IsPlaying then
+			if not tostring(k):lower():find("click") then
+				best = math.max(best, v.PlaybackLoudness)
+			end
+		end
+	end
+	if type(us) == "table" then
+		for k, v in pairs(us) do consider(k, v) end
+	elseif typeof(us) == "Instance" then
+		for _, v in ipairs(us:GetDescendants()) do consider(v.Name, v) end
+	end
+	return best
+end
+
+----------------------------------------------------------------
+-- Config pages: Moveset (trail, aura, glow, outline), Dancing (ghosts), Interface, Presets, About
 ----------------------------------------------------------------
 local LocalPlayer = Players.LocalPlayer
+local HttpService = game:GetService("HttpService")
+local StatsService = game:GetService("Stats")
+local setClipboard = setclipboard or toclipboard
 
 local PART_ALIASES = {
 	["Torso"] = {"Torso", "UpperTorso"},
@@ -706,7 +1212,45 @@ local TRAIL_LOCATIONS = {
 	"Torso", "Head", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Root",
 	"Both Arms", "Both Legs", "All Limbs", "Whole Body",
 }
+local SINGLE_LOCATIONS = {"Torso", "Head", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Root"}
 local GHOST_MATERIALS = {"Neon", "ForceField", "SmoothPlastic", "Glass"}
+local AURA_STYLES = {"Sparkles", "Smoke", "Fire"}
+local AURA_TEXTURES = {
+	Sparkles = "rbxasset://textures/particles/sparkles_main.dds",
+	Smoke = "rbxasset://textures/particles/smoke_main.dds",
+	Fire = "rbxasset://textures/particles/fire_main.dds",
+}
+local HUD_CORNERS = {"Top Right", "Top Left", "Bottom Left", "Bottom Right"}
+
+local DEF_TRAIL = {
+	Enabled = false, Location = "Torso", Orientation = "Vertical", Rainbow = false,
+	R = 255, G = 255, B = 255, Lifetime = 0.6, Width = 1.5,
+	Transparency = 0.2, LightEmission = 0.8, FaceCamera = false,
+}
+local DEF_DANCE = {
+	Enabled = false, Trigger = "Dancing (auto)", Interval = 0.2, Fade = 0.8,
+	StartTransparency = 0.4, MaxGhosts = 12, Expand = 0, Material = "Neon",
+	Rainbow = false, R = 255, G = 255, B = 255,
+}
+local DEF_AURA = {
+	Enabled = false, Location = "Torso", Style = "Sparkles", Rate = 20, Size = 0.6,
+	Lifetime = 1, Speed = 2, Rainbow = false, R = 255, G = 255, B = 255, LightEmission = 0.6,
+}
+local DEF_GLOW = {
+	Enabled = false, Location = "Torso", Brightness = 2, Range = 14,
+	Rainbow = false, R = 255, G = 255, B = 255,
+}
+local DEF_OUTLINE = {
+	Enabled = false, Rainbow = false, R = 255, G = 255, B = 255,
+	FillTransparency = 1, OutlineTransparency = 0, AlwaysOnTop = true,
+}
+local DEF_ROOT = {
+	ClientEnabled = true, ServerEnabled = true,
+	Thickness = 0.08, FillTransparency = 1, Speed = 0.3,
+}
+local DEF_UI = copyTable(BG_CFG_DEFAULTS)
+DEF_UI.HudEnabled = false
+DEF_UI.HudCorner = "Top Right"
 
 local function ensureDefaults(tbl, defaults)
 	if type(tbl) ~= "table" then tbl = {} end
@@ -714,6 +1258,14 @@ local function ensureDefaults(tbl, defaults)
 		if tbl[k] == nil then tbl[k] = v end
 	end
 	return tbl
+end
+
+-- copy only the keys that already exist (and have the same type) from a loaded preset
+local function applyInto(target, src)
+	if type(src) ~= "table" then return end
+	for k, v in pairs(src) do
+		if target[k] ~= nil and type(target[k]) == type(v) then target[k] = v end
+	end
 end
 
 -- the models that make up the player's body (the script's own character, the original one, the camera's)
@@ -772,6 +1324,55 @@ local function visibleBodyParts()
 	return out
 end
 
+-- the first body model that actually has something visible (for the outline)
+local function visibleBodyModel()
+	for _, m in ipairs(bodyModels()) do
+		for _, d in ipairs(m:GetDescendants()) do
+			if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" and d.Transparency < 0.95 then
+				return m
+			end
+		end
+	end
+	return nil
+end
+
+-- the client-side root (the fake "(C) ..." rig the script moves) and the server-sided root
+-- (the real character that the server sees). With no fake rig only one root exists.
+local function findRootParts()
+	local function rootOf(m)
+		local r = m and m:FindFirstChild("HumanoidRootPart")
+		if r and r:IsA("BasePart") then return r end
+		return nil
+	end
+	local fake, real = nil, nil
+	local function consider(m)
+		if not (m and m:IsA("Model")) then return end
+		if m.Name:sub(1, 3) == "(C)" then
+			fake = fake or m
+		elseif m.Name == LocalPlayer.Name or m == LocalPlayer.Character then
+			real = real or m
+		end
+	end
+	consider(LocalPlayer.Character)
+	consider(workspace:FindFirstChild(LocalPlayer.Name))
+	local cam = workspace.CurrentCamera
+	if cam and cam.CameraSubject and cam.CameraSubject:IsA("Humanoid") then
+		consider(cam.CameraSubject.Parent)
+	end
+	if not fake then
+		for _, m in ipairs(workspace:GetChildren()) do
+			if m:IsA("Model") and m.Name:sub(1, 3) == "(C)" then
+				fake = m
+				break
+			end
+		end
+	end
+	local clientRoot = rootOf(fake) or rootOf(real)
+	local serverRoot = rootOf(real)
+	if serverRoot == clientRoot then serverRoot = nil end
+	return clientRoot, serverRoot
+end
+
 local function rainbowSequence(t)
 	local kp = table.create(5)
 	for i = 0, 4 do
@@ -780,35 +1381,63 @@ local function rainbowSequence(t)
 	return ColorSequence.new(kp)
 end
 
+local function rainbowColor(t)
+	return Color3.fromHSV((t * 0.3) % 1, 1, 1)
+end
+
+local function sameParts(a, b)
+	if #a ~= #b then return false end
+	for i, p in ipairs(a) do
+		if b[i] ~= p or not p.Parent then return false end
+	end
+	return true
+end
+
 local function buildConfigUI(UI, MainPage, SaveData, UISound)
-	local T = ensureDefaults(SaveData.NOTTrail, {
-		Enabled = false, Location = "Torso", Orientation = "Vertical", Rainbow = false,
-		R = 255, G = 255, B = 255, Lifetime = 0.6, Width = 1.5,
-		Transparency = 0.2, LightEmission = 0.8, FaceCamera = false,
-	})
-	SaveData.NOTTrail = T
-	local D = ensureDefaults(SaveData.NOTDance, {
-		Enabled = false, Trigger = "Dancing (auto)", Interval = 0.2, Fade = 0.8,
-		StartTransparency = 0.4, MaxGhosts = 12, Expand = 0, Material = "Neon",
-		Rainbow = false, R = 255, G = 255, B = 255,
-	})
-	SaveData.NOTDance = D
+	BG.uiSound = UISound
+
+	-- settings live in SaveData, so the script saves them together with its own settings
+	local T = ensureDefaults(SaveData.NOTTrail, DEF_TRAIL)
+	local D = ensureDefaults(SaveData.NOTDance, DEF_DANCE)
+	local A = ensureDefaults(SaveData.NOTAura, DEF_AURA)
+	local G = ensureDefaults(SaveData.NOTGlow, DEF_GLOW)
+	local O = ensureDefaults(SaveData.NOTOutline, DEF_OUTLINE)
+	local U = ensureDefaults(SaveData.NOTUI, DEF_UI)
+	SaveData.NOTTrail, SaveData.NOTDance, SaveData.NOTAura = T, D, A
+	SaveData.NOTGlow, SaveData.NOTOutline, SaveData.NOTUI = G, O, U
+	BG.cfg = U
+	local RT = ensureDefaults(SaveData.NOTRoot, DEF_ROOT)
+	SaveData.NOTRoot = RT
 
 	local function round2(v) return math.floor(v * 100 + 0.5) / 100 end
 	local function indexOf(list, v) return table.find(list, v) or 1 end
 
+	local trailState = {objs = {}, parts = {}, dirty = true}
+	local auraState = {objs = {}, parts = {}, dirty = true}
+	local glowState = {obj = nil, part = nil, dirty = true}
+	local outlineState = {obj = nil, model = nil, dirty = true}
+	local rootState = {dirty = true}
+	local function markAllDirty()
+		trailState.dirty, auraState.dirty, glowState.dirty, outlineState.dirty, rootState.dirty = true, true, true, true, true
+	end
+	local function trailDirty() trailState.dirty = true end
+	local function auraDirty() auraState.dirty = true end
+	local function glowDirty() glowState.dirty = true end
+	local function outlineDirty() outlineState.dirty = true end
+	local function rootDirty() rootState.dirty = true end
+
 	----------------------------------------------------------------
-	-- pages
+	-- page helpers
 	----------------------------------------------------------------
-	local function makePage()
+	local pages = {}
+	local function newPage()
 		local p = UI.CreatePage()
 		p.Visible = false
 		p.Active = true
 		p.ZIndex = 20
+		table.insert(pages, p)
 		return p
 	end
-	local configPage, movesetPage, dancePage = makePage(), makePage(), makePage()
-	local pages = {configPage, movesetPage, dancePage}
 	local function showPage(page)
 		for _, p in ipairs(pages) do
 			p.Visible = (p == page)
@@ -818,49 +1447,282 @@ local function buildConfigUI(UI, MainPage, SaveData, UISound)
 		local b = UI.CreateButton(page, " &lt; Back", 20)
 		b.Activated:Connect(function() showPage(target) end)
 	end
+	local function linkButton(fromPage, text, toPage)
+		local b = UI.CreateButton(fromPage, text, 20)
+		b.Activated:Connect(function() showPage(toPage) end)
+	end
+	local function note(page, text, size)
+		UI.CreateText(page, text, size or 12, Enum.TextXAlignment.Left)
+	end
+	local function switchRow(page, label, tbl, key, onChange)
+		UI.CreateSwitch(page, label, tbl[key]).Changed:Connect(function(v)
+			tbl[key] = v
+			if onChange then onChange() end
+		end)
+	end
+	local function sliderRow(page, label, tbl, key, lo, hi, stepv, onChange, isInt)
+		UI.CreateSlider(page, label, tbl[key], lo, hi, stepv).Changed:Connect(function(v)
+			if isInt then v = math.floor(v + 0.5) else v = round2(v) end
+			tbl[key] = v
+			if onChange then onChange() end
+		end)
+	end
+	local function dropdownRow(page, label, list, tbl, key, onChange)
+		UI.CreateDropdown(page, label, list, indexOf(list, tbl[key])).Changed:Connect(function(i)
+			tbl[key] = list[i] or list[1]
+			if onChange then onChange() end
+		end)
+	end
+	local function colorRows(page, tbl, onChange)
+		switchRow(page, "Rainbow", tbl, "Rainbow", onChange)
+		sliderRow(page, "Red", tbl, "R", 0, 255, 1, onChange, true)
+		sliderRow(page, "Green", tbl, "G", 0, 255, 1, onChange, true)
+		sliderRow(page, "Blue", tbl, "B", 0, 255, 1, onChange, true)
+	end
+	-- shows a message on a button for a moment
+	local function flashText(label, text, original)
+		task.spawn(function()
+			label.Text = text
+			task.wait(2.5)
+			label.Text = original
+		end)
+	end
+
+	----------------------------------------------------------------
+	-- the pages
+	----------------------------------------------------------------
+	local configPage = newPage()
+	local movesetPage, trailPage, auraPage, glowPage, outlinePage, rootPage = newPage(), newPage(), newPage(), newPage(), newPage(), newPage()
+	local dancePage, interfacePage, presetsPage, aboutPage = newPage(), newPage(), newPage(), newPage()
 
 	-- the "Config" button on the main page
 	local cfgBtn = UI.CreateButton(MainPage, "Config", 20)
 	local cfgContainer = cfgBtn.Parent
 	cfgBtn.Activated:Connect(function() showPage(configPage) end)
 
-	-- config page
 	backButton(configPage, nil)
 	UI.CreateSeparator(configPage)
-	UI.CreateButton(configPage, "Moveset configs", 20).Activated:Connect(function() showPage(movesetPage) end)
-	UI.CreateButton(configPage, "Dancing configs", 20).Activated:Connect(function() showPage(dancePage) end)
+	linkButton(configPage, "Moveset configs", movesetPage)
+	linkButton(configPage, "Dancing configs", dancePage)
+	linkButton(configPage, "Interface", interfacePage)
+	linkButton(configPage, "Presets", presetsPage)
+	linkButton(configPage, "About", aboutPage)
 
-	----------------------------------------------------------------
-	-- moveset configs: trail
-	----------------------------------------------------------------
-	local trailState = {objs = {}, parts = {}, dirty = true}
-	local function dirty() trailState.dirty = true end
-
+	-- moveset configs
 	backButton(movesetPage, configPage)
 	UI.CreateSeparator(movesetPage)
-	UI.CreateText(movesetPage, "Trail: a ribbon that follows your reanimated body wherever you put it.", 13, Enum.TextXAlignment.Left)
-	UI.CreateSwitch(movesetPage, "Trail", T.Enabled).Changed:Connect(function(v) T.Enabled = v dirty() end)
-	UI.CreateDropdown(movesetPage, "Location", TRAIL_LOCATIONS, indexOf(TRAIL_LOCATIONS, T.Location)).Changed:Connect(function(i)
-		T.Location = TRAIL_LOCATIONS[i] or "Torso"
-		dirty()
-	end)
-	local ORIENTATIONS = {"Vertical", "Horizontal"}
-	UI.CreateDropdown(movesetPage, "Direction", ORIENTATIONS, indexOf(ORIENTATIONS, T.Orientation)).Changed:Connect(function(i)
-		T.Orientation = ORIENTATIONS[i] or "Vertical"
-		dirty()
-	end)
-	UI.CreateSeparator(movesetPage)
-	UI.CreateSwitch(movesetPage, "Rainbow", T.Rainbow).Changed:Connect(function(v) T.Rainbow = v dirty() end)
-	UI.CreateSlider(movesetPage, "Red", T.R, 0, 255, 1).Changed:Connect(function(v) T.R = math.floor(v + 0.5) dirty() end)
-	UI.CreateSlider(movesetPage, "Green", T.G, 0, 255, 1).Changed:Connect(function(v) T.G = math.floor(v + 0.5) dirty() end)
-	UI.CreateSlider(movesetPage, "Blue", T.B, 0, 255, 1).Changed:Connect(function(v) T.B = math.floor(v + 0.5) dirty() end)
-	UI.CreateSeparator(movesetPage)
-	UI.CreateSlider(movesetPage, "Lifetime (sec)", T.Lifetime, 0.1, 3, 0.1).Changed:Connect(function(v) T.Lifetime = round2(v) dirty() end)
-	UI.CreateSlider(movesetPage, "Width", T.Width, 0.2, 6, 0.1).Changed:Connect(function(v) T.Width = round2(v) dirty() end)
-	UI.CreateSlider(movesetPage, "Transparency", T.Transparency, 0, 1, 0.05).Changed:Connect(function(v) T.Transparency = round2(v) dirty() end)
-	UI.CreateSlider(movesetPage, "Glow", T.LightEmission, 0, 1, 0.05).Changed:Connect(function(v) T.LightEmission = round2(v) dirty() end)
-	UI.CreateSwitch(movesetPage, "Face camera", T.FaceCamera).Changed:Connect(function(v) T.FaceCamera = v dirty() end)
+	note(movesetPage, "Effects that follow your reanimated body.")
+	linkButton(movesetPage, "Trail", trailPage)
+	linkButton(movesetPage, "Aura particles", auraPage)
+	linkButton(movesetPage, "Body glow", glowPage)
+	linkButton(movesetPage, "Outline", outlinePage)
+	linkButton(movesetPage, "Root outlines", rootPage)
 
+	-- trail
+	backButton(trailPage, movesetPage)
+	UI.CreateSeparator(trailPage)
+	note(trailPage, "A ribbon that follows your body wherever you put it.")
+	switchRow(trailPage, "Trail", T, "Enabled", trailDirty)
+	dropdownRow(trailPage, "Location", TRAIL_LOCATIONS, T, "Location", trailDirty)
+	dropdownRow(trailPage, "Direction", {"Vertical", "Horizontal"}, T, "Orientation", trailDirty)
+	UI.CreateSeparator(trailPage)
+	colorRows(trailPage, T, trailDirty)
+	UI.CreateSeparator(trailPage)
+	sliderRow(trailPage, "Lifetime (sec)", T, "Lifetime", 0.1, 3, 0.1, trailDirty)
+	sliderRow(trailPage, "Width", T, "Width", 0.2, 6, 0.1, trailDirty)
+	sliderRow(trailPage, "Transparency", T, "Transparency", 0, 1, 0.05, trailDirty)
+	sliderRow(trailPage, "Glow", T, "LightEmission", 0, 1, 0.05, trailDirty)
+	switchRow(trailPage, "Face camera", T, "FaceCamera", trailDirty)
+
+	-- aura
+	backButton(auraPage, movesetPage)
+	UI.CreateSeparator(auraPage)
+	note(auraPage, "Particles that float around the chosen body part.")
+	switchRow(auraPage, "Aura", A, "Enabled", auraDirty)
+	dropdownRow(auraPage, "Location", SINGLE_LOCATIONS, A, "Location", auraDirty)
+	dropdownRow(auraPage, "Style", AURA_STYLES, A, "Style", auraDirty)
+	UI.CreateSeparator(auraPage)
+	colorRows(auraPage, A, auraDirty)
+	UI.CreateSeparator(auraPage)
+	sliderRow(auraPage, "Amount", A, "Rate", 1, 100, 1, auraDirty, true)
+	sliderRow(auraPage, "Size", A, "Size", 0.1, 3, 0.1, auraDirty)
+	sliderRow(auraPage, "Lifetime (sec)", A, "Lifetime", 0.2, 3, 0.1, auraDirty)
+	sliderRow(auraPage, "Speed", A, "Speed", 0, 10, 0.5, auraDirty)
+	sliderRow(auraPage, "Glow", A, "LightEmission", 0, 1, 0.05, auraDirty)
+
+	-- glow
+	backButton(glowPage, movesetPage)
+	UI.CreateSeparator(glowPage)
+	note(glowPage, "A light that makes your avatar light up its surroundings.")
+	switchRow(glowPage, "Body glow", G, "Enabled", glowDirty)
+	dropdownRow(glowPage, "Location", SINGLE_LOCATIONS, G, "Location", glowDirty)
+	UI.CreateSeparator(glowPage)
+	colorRows(glowPage, G, glowDirty)
+	UI.CreateSeparator(glowPage)
+	sliderRow(glowPage, "Brightness", G, "Brightness", 0, 8, 0.25, glowDirty)
+	sliderRow(glowPage, "Range", G, "Range", 4, 40, 1, glowDirty, true)
+
+	-- outline
+	backButton(outlinePage, movesetPage)
+	UI.CreateSeparator(outlinePage)
+	note(outlinePage, "A colored outline around your whole avatar.")
+	switchRow(outlinePage, "Outline", O, "Enabled", outlineDirty)
+	switchRow(outlinePage, "See through walls", O, "AlwaysOnTop", outlineDirty)
+	UI.CreateSeparator(outlinePage)
+	colorRows(outlinePage, O, outlineDirty)
+	UI.CreateSeparator(outlinePage)
+	sliderRow(outlinePage, "Fill transparency", O, "FillTransparency", 0, 1, 0.05, outlineDirty)
+	sliderRow(outlinePage, "Outline transparency", O, "OutlineTransparency", 0, 1, 0.05, outlineDirty)
+
+	-- root outlines
+	backButton(rootPage, movesetPage)
+	UI.CreateSeparator(rootPage)
+	note(rootPage, "Blocky box outlines around your root parts. The client root is rainbow, the server-sided root is inverted rainbow (runs the other way, opposite colors).")
+	switchRow(rootPage, "Client root outline", RT, "ClientEnabled", rootDirty)
+	switchRow(rootPage, "Server root outline", RT, "ServerEnabled", rootDirty)
+	note(rootPage, "Without the fake rig both roots are the same, so only the rainbow one shows.", 11)
+	UI.CreateSeparator(rootPage)
+	sliderRow(rootPage, "Line thickness", RT, "Thickness", 0.02, 0.3, 0.01)
+	sliderRow(rootPage, "Fill transparency", RT, "FillTransparency", 0.5, 1, 0.05)
+	sliderRow(rootPage, "Rainbow speed", RT, "Speed", 0.05, 2, 0.05)
+
+	-- dancing configs
+	local TRIGGERS = {"Dancing (auto)", "Always"}
+	backButton(dancePage, configPage)
+	UI.CreateSeparator(dancePage)
+	note(dancePage, "Ghosts: while you dance, solid copies of your avatar stay where they spawned and fade out. Off until you turn it on.", 13)
+	switchRow(dancePage, "Dancing ghosts", D, "Enabled")
+	dropdownRow(dancePage, "Active when", TRIGGERS, D, "Trigger")
+	note(dancePage, "Dancing (auto) = dance music or an emote is playing. Pick Always to test it, or for dances without music.", 11)
+	UI.CreateSeparator(dancePage)
+	sliderRow(dancePage, "Spawn every (sec)", D, "Interval", 0.05, 2, 0.05, function() D.Interval = math.max(0.05, D.Interval) end)
+	sliderRow(dancePage, "Fade out (sec)", D, "Fade", 0.1, 3, 0.1, function() D.Fade = math.max(0.1, D.Fade) end)
+	sliderRow(dancePage, "Start transparency", D, "StartTransparency", 0, 0.9, 0.05)
+	sliderRow(dancePage, "Max ghosts", D, "MaxGhosts", 1, 40, 1, nil, true)
+	sliderRow(dancePage, "Expand while fading", D, "Expand", 0, 1, 0.05)
+	dropdownRow(dancePage, "Material", GHOST_MATERIALS, D, "Material")
+	UI.CreateSeparator(dancePage)
+	colorRows(dancePage, D, nil)
+
+	-- interface
+	backButton(interfacePage, configPage)
+	UI.CreateSeparator(interfacePage)
+	note(interfacePage, "Info overlay: FPS, ping and the time.")
+	switchRow(interfacePage, "Info overlay", U, "HudEnabled")
+	dropdownRow(interfacePage, "Overlay corner", HUD_CORNERS, U, "HudCorner")
+	UI.CreateSeparator(interfacePage)
+	note(interfacePage, "Intro: Full, Short or Off. Applies the next time you start the script.")
+	UI.CreateDropdown(interfacePage, "Intro", INTRO_STYLES, indexOf(INTRO_STYLES, INTRO_STYLE)).Changed:Connect(function(i)
+		pcall(writefile, INTRO_FILE, INTRO_STYLES[i] or "Full")
+	end)
+	UI.CreateSeparator(interfacePage)
+	note(interfacePage, "Background look (pattern and animated scenes).")
+	sliderRow(interfacePage, "Pattern fade", U, "PatternAlpha", 0.5, 0.98, 0.02)
+	sliderRow(interfacePage, "Pattern speed", U, "PatternSpeed", 0, 40, 1, nil, true)
+	sliderRow(interfacePage, "Pattern size", U, "PatternTile", 40, 160, 4, nil, true)
+	sliderRow(interfacePage, "Scene fade", U, "SceneAlpha", 0.5, 0.98, 0.02)
+	sliderRow(interfacePage, "Scene speed (fps)", U, "SceneFPS", 5, 30, 1, nil, true)
+
+	-- presets
+	local CONFIG_DIR = DATA_FOLDER .. "/Content/configs"
+	local function ensureConfigDir()
+		pcall(makefolder, DATA_FOLDER)
+		pcall(makefolder, DATA_FOLDER .. "/Content")
+		pcall(makefolder, CONFIG_DIR)
+	end
+	local function listPresets()
+		local names, paths = {}, {}
+		local ok, files = pcall(listfiles, CONFIG_DIR)
+		if ok and type(files) == "table" then
+			table.sort(files)
+			for _, f in ipairs(files) do
+				local fname = f:match("([^/\\]+)$")
+				if fname and fname:lower():match("%.json$") then
+					table.insert(names, (fname:gsub("%.[Jj][Ss][Oo][Nn]$", "")))
+					table.insert(paths, f)
+				end
+			end
+		end
+		return names, paths
+	end
+	local function snapshot()
+		return {Trail = T, Dance = D, Aura = A, Glow = G, Outline = O, Root = RT, UI = U}
+	end
+	local function resetTable(t, def)
+		for k, v in pairs(def) do t[k] = v end
+	end
+
+	ensureConfigDir()
+	local presetNames, presetPaths = listPresets()
+	local shownNames = (#presetNames > 0) and presetNames or {"(none saved yet)"}
+	local presetIndex = 1
+
+	backButton(presetsPage, configPage)
+	UI.CreateSeparator(presetsPage)
+	note(presetsPage, "Presets save all your Config settings to a file in Content/configs, so you can switch looks or share them. Restart the script to see sliders update after loading.")
+	UI.CreateDropdown(presetsPage, "Preset", shownNames, 1).Changed:Connect(function(i) presetIndex = i end)
+	local loadBtn, loadLbl = UI.CreateButton(presetsPage, "Load selected preset", 20)
+	loadBtn.Activated:Connect(function()
+		local path = presetPaths[presetIndex]
+		if not path then
+			flashText(loadLbl, "No preset selected", "Load selected preset")
+			return
+		end
+		local ok = pcall(function()
+			local data = HttpService:JSONDecode(readfile(path))
+			applyInto(T, data.Trail)
+			applyInto(D, data.Dance)
+			applyInto(A, data.Aura)
+			applyInto(G, data.Glow)
+			applyInto(O, data.Outline)
+			applyInto(RT, data.Root)
+			applyInto(U, data.UI)
+		end)
+		markAllDirty()
+		flashText(loadLbl, ok and "Loaded!" or "Could not load", "Load selected preset")
+	end)
+	local saveBtn, saveLbl = UI.CreateButton(presetsPage, "Save current as new preset", 20)
+	saveBtn.Activated:Connect(function()
+		ensureConfigDir()
+		local name = "preset_" .. os.date("%Y%m%d_%H%M%S")
+		local ok = pcall(function()
+			writefile(CONFIG_DIR .. "/" .. name .. ".json", HttpService:JSONEncode(snapshot()))
+		end)
+		flashText(saveLbl, ok and ("Saved " .. name:sub(8)) or "Could not save", "Save current as new preset")
+	end)
+	local copyBtn, copyLbl = UI.CreateButton(presetsPage, "Copy config to clipboard", 20)
+	copyBtn.Activated:Connect(function()
+		local ok = pcall(function() setClipboard(HttpService:JSONEncode(snapshot())) end)
+		flashText(copyLbl, ok and "Copied!" or "Clipboard not supported", "Copy config to clipboard")
+	end)
+	local resetBtn, resetLbl = UI.CreateButton(presetsPage, "Reset all configs", 20)
+	resetBtn.Activated:Connect(function()
+		resetTable(T, DEF_TRAIL)
+		resetTable(D, DEF_DANCE)
+		resetTable(A, DEF_AURA)
+		resetTable(G, DEF_GLOW)
+		resetTable(O, DEF_OUTLINE)
+		resetTable(RT, DEF_ROOT)
+		resetTable(U, DEF_UI)
+		markAllDirty()
+		flashText(resetLbl, "Reset! Restart to refresh sliders", "Reset all configs")
+	end)
+
+	-- about
+	backButton(aboutPage, configPage)
+	UI.CreateSeparator(aboutPage)
+	note(aboutPage, TITLE .. " " .. VERSION, 15)
+	note(aboutPage, "Built on Uhhhhhh Reanimate by STEVE, modded by awes955.")
+	UI.CreateSeparator(aboutPage)
+	note(aboutPage, "Backgrounds: put pictures (.png .jpg) or ascii art (.txt) into " .. DATA_FOLDER .. "/Content/backgrounds, restart, then pick them under Background.")
+	note(aboutPage, "Presets are saved in " .. DATA_FOLDER .. "/Content/configs.")
+	note(aboutPage, "The two buttons at the bottom of the main page copy files over from the UhhhhhhReanim and BlaablaaReanim folders.")
+	note(aboutPage, "Tap the screen during the intro to skip it. Intro style: Config > Interface.")
+
+	----------------------------------------------------------------
+	-- the effects
+	----------------------------------------------------------------
+	-- trail
 	local function clearTrails()
 		for _, o in ipairs(trailState.objs) do
 			pcall(function()
@@ -872,7 +1734,6 @@ local function buildConfigUI(UI, MainPage, SaveData, UISound)
 		trailState.objs = {}
 		trailState.parts = {}
 	end
-
 	local function buildTrails(parts)
 		clearTrails()
 		local half = T.Width / 2
@@ -905,33 +1766,88 @@ local function buildConfigUI(UI, MainPage, SaveData, UISound)
 		trailState.dirty = false
 	end
 
-	----------------------------------------------------------------
-	-- dancing configs: ghost fills
-	----------------------------------------------------------------
-	local TRIGGERS = {"Dancing (auto)", "Always"}
-	backButton(dancePage, configPage)
-	UI.CreateSeparator(dancePage)
-	UI.CreateText(dancePage, "Ghosts: while you dance, solid copies of your avatar stay where they spawned and fade out. Off until you turn it on.", 13, Enum.TextXAlignment.Left)
-	UI.CreateSwitch(dancePage, "Dancing ghosts", D.Enabled).Changed:Connect(function(v) D.Enabled = v end)
-	UI.CreateDropdown(dancePage, "Active when", TRIGGERS, indexOf(TRIGGERS, D.Trigger)).Changed:Connect(function(i)
-		D.Trigger = TRIGGERS[i] or TRIGGERS[1]
-	end)
-	UI.CreateText(dancePage, "Dancing (auto) = dance music or an emote is playing. Pick Always to test it or for dances without music.", 11, Enum.TextXAlignment.Left)
-	UI.CreateSeparator(dancePage)
-	UI.CreateSlider(dancePage, "Spawn every (sec)", D.Interval, 0.05, 2, 0.05).Changed:Connect(function(v) D.Interval = math.max(0.05, round2(v)) end)
-	UI.CreateSlider(dancePage, "Fade out (sec)", D.Fade, 0.1, 3, 0.1).Changed:Connect(function(v) D.Fade = math.max(0.1, round2(v)) end)
-	UI.CreateSlider(dancePage, "Start transparency", D.StartTransparency, 0, 0.9, 0.05).Changed:Connect(function(v) D.StartTransparency = round2(v) end)
-	UI.CreateSlider(dancePage, "Max ghosts", D.MaxGhosts, 1, 40, 1).Changed:Connect(function(v) D.MaxGhosts = math.floor(v + 0.5) end)
-	UI.CreateSlider(dancePage, "Expand while fading", D.Expand, 0, 1, 0.05).Changed:Connect(function(v) D.Expand = round2(v) end)
-	UI.CreateDropdown(dancePage, "Material", GHOST_MATERIALS, indexOf(GHOST_MATERIALS, D.Material)).Changed:Connect(function(i)
-		D.Material = GHOST_MATERIALS[i] or "Neon"
-	end)
-	UI.CreateSeparator(dancePage)
-	UI.CreateSwitch(dancePage, "Rainbow", D.Rainbow).Changed:Connect(function(v) D.Rainbow = v end)
-	UI.CreateSlider(dancePage, "Red", D.R, 0, 255, 1).Changed:Connect(function(v) D.R = math.floor(v + 0.5) end)
-	UI.CreateSlider(dancePage, "Green", D.G, 0, 255, 1).Changed:Connect(function(v) D.G = math.floor(v + 0.5) end)
-	UI.CreateSlider(dancePage, "Blue", D.B, 0, 255, 1).Changed:Connect(function(v) D.B = math.floor(v + 0.5) end)
+	-- aura particles
+	local function clearAura()
+		for _, e in ipairs(auraState.objs) do
+			pcall(function() e:Destroy() end)
+		end
+		auraState.objs = {}
+		auraState.parts = {}
+	end
+	local function buildAura(parts)
+		clearAura()
+		for _, part in ipairs(parts) do
+			local e = Instance.new("ParticleEmitter")
+			e.Name = "NOTAura"
+			e.Texture = AURA_TEXTURES[A.Style] or AURA_TEXTURES.Sparkles
+			e.Rate = A.Rate
+			e.Lifetime = NumberRange.new(A.Lifetime * 0.7, A.Lifetime * 1.3)
+			e.Speed = NumberRange.new(A.Speed * 0.5, A.Speed)
+			e.Size = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, A.Size),
+				NumberSequenceKeypoint.new(1, 0),
+			})
+			e.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0),
+				NumberSequenceKeypoint.new(0.7, 0.3),
+				NumberSequenceKeypoint.new(1, 1),
+			})
+			e.LightEmission = A.LightEmission
+			e.Color = ColorSequence.new(Color3.fromRGB(A.R, A.G, A.B))
+			e.SpreadAngle = Vector2.new(180, 180)
+			e.Rotation = NumberRange.new(0, 360)
+			e.RotSpeed = NumberRange.new(-60, 60)
+			e.Parent = part
+			table.insert(auraState.objs, e)
+		end
+		auraState.parts = parts
+		auraState.dirty = false
+	end
 
+	-- glow
+	local function clearGlow()
+		if glowState.obj then
+			pcall(function() glowState.obj:Destroy() end)
+		end
+		glowState.obj, glowState.part = nil, nil
+	end
+
+	-- outline
+	local function clearOutline()
+		if outlineState.obj then
+			pcall(function() outlineState.obj:Destroy() end)
+		end
+		outlineState.obj, outlineState.model = nil, nil
+	end
+
+	-- root outlines (blocky selection boxes)
+	local rootBoxes = {}
+	local function clearRootBoxes()
+		for k, b in pairs(rootBoxes) do
+			pcall(function() b:Destroy() end)
+			rootBoxes[k] = nil
+		end
+	end
+	local function ensureRootBox(key, part)
+		local box = rootBoxes[key]
+		if not part then
+			if box then
+				pcall(function() box:Destroy() end)
+				rootBoxes[key] = nil
+			end
+			return
+		end
+		if box and box.Parent and box.Adornee == part then return end
+		if box then pcall(function() box:Destroy() end) end
+		local b = Instance.new("SelectionBox")
+		b.Name = "NOTRoot" .. key
+		b.Adornee = part
+		b.Transparency = 0
+		b.Parent = workspace.CurrentCamera or workspace
+		rootBoxes[key] = b
+	end
+
+	-- dancing ghosts
 	local ghosts = {}
 	local function clearGhosts()
 		for _, g in ipairs(ghosts) do
@@ -942,7 +1858,18 @@ local function buildConfigUI(UI, MainPage, SaveData, UISound)
 
 	local function isDancing()
 		if D.Trigger == "Always" then return true end
-		if UISound and UISound.DanceMusic and UISound.DanceMusic.IsPlaying then return true end
+		if UISound then
+			if type(UISound) == "table" then
+				local dm = UISound.DanceMusic
+				if typeof(dm) == "Instance" and dm:IsA("Sound") and dm.IsPlaying then return true end
+				for k, v in pairs(UISound) do
+					if typeof(v) == "Instance" and v:IsA("Sound") and v.IsPlaying
+						and tostring(k):lower():find("dance") then
+						return true
+					end
+				end
+			end
+		end
 		for _, m in ipairs(bodyModels()) do
 			local hum = m:FindFirstChildOfClass("Humanoid")
 			local animator = hum and hum:FindFirstChildOfClass("Animator")
@@ -990,7 +1917,7 @@ local function buildConfigUI(UI, MainPage, SaveData, UISound)
 		if #parts == 0 then return end
 		local folder = Instance.new("Folder")
 		folder.Name = "NOTGhost"
-		local color = D.Rainbow and Color3.fromHSV((os.clock() * 0.4) % 1, 1, 1) or Color3.fromRGB(D.R, D.G, D.B)
+		local color = D.Rainbow and rainbowColor(os.clock() * 1.3) or Color3.fromRGB(D.R, D.G, D.B)
 		local material = Enum.Material.Neon
 		pcall(function() material = Enum.Material[D.Material] end)
 		local fade = math.max(0.1, D.Fade)
@@ -1017,27 +1944,59 @@ local function buildConfigUI(UI, MainPage, SaveData, UISound)
 		end
 	end
 
+	-- info overlay (FPS / ping / time)
+	local hud = {gui = nil, label = nil, acc = 0, frames = 0, corner = nil}
+	local function clearHud()
+		if hud.gui then
+			pcall(function() hud.gui:Destroy() end)
+		end
+		hud.gui, hud.label, hud.corner = nil, nil, nil
+	end
+	local function makeHud()
+		local g = Instance.new("ScreenGui")
+		g.Name = tostring(math.random(1000000, 9000000))
+		g.ResetOnSpawn = false
+		g.IgnoreGuiInset = true
+		g.DisplayOrder = 2147483000
+		local hidden = (gethui and gethui()) or (get_hidden_gui and get_hidden_gui())
+		if not pcall(function() g.Parent = hidden or CoreGui end) then
+			g.Parent = LocalPlayer:FindFirstChild("PlayerGui")
+		end
+		local l = Instance.new("TextLabel")
+		l.AutomaticSize = Enum.AutomaticSize.XY
+		l.Size = UDim2.fromOffset(0, 0)
+		l.BackgroundColor3 = Color3.new(0, 0, 0)
+		l.BackgroundTransparency = 0.45
+		l.BorderSizePixel = 0
+		l.TextColor3 = Color3.new(1, 1, 1)
+		l.Font = ASCII_FONT
+		l.TextSize = 13
+		l.Text = "FPS --"
+		l.Parent = g
+		local pad = Instance.new("UIPadding")
+		pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
+		pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 3), UDim.new(0, 3)
+		pad.Parent = l
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 4)
+		corner.Parent = l
+		hud.gui, hud.label, hud.corner = g, l, nil
+	end
+
 	----------------------------------------------------------------
-	-- run both effects
+	-- run everything
 	----------------------------------------------------------------
-	local trailAcc, ghostAcc = 0, 0
-	local function step(dt)
-		-- trail
+	local trailAcc, auraAcc, glowAcc, outlineAcc, ghostAcc = 0, 0, 0, 0, 0
+
+	local function stepTrail(dt)
 		if T.Enabled then
 			trailAcc += dt
 			if trailAcc >= 0.25 or trailState.dirty then
 				trailAcc = 0
 				local parts = resolveTrailParts(T.Location)
-				local same = (not trailState.dirty) and #parts == #trailState.parts
-				if same then
-					for i, p in ipairs(parts) do
-						if trailState.parts[i] ~= p or not p.Parent then
-							same = false
-							break
-						end
-					end
+				if trailState.dirty or not sameParts(parts, trailState.parts) then
+					buildTrails(parts)
 				end
-				if not same then buildTrails(parts) end
 			end
 			if T.Rainbow then
 				local seq = rainbowSequence(os.clock())
@@ -1046,8 +2005,117 @@ local function buildConfigUI(UI, MainPage, SaveData, UISound)
 		elseif #trailState.objs > 0 then
 			clearTrails()
 		end
+	end
 
-		-- ghosts
+	local function stepAura(dt)
+		if A.Enabled then
+			auraAcc += dt
+			if auraAcc >= 0.25 or auraState.dirty then
+				auraAcc = 0
+				local parts = resolveTrailParts(A.Location)
+				if auraState.dirty or not sameParts(parts, auraState.parts) then
+					buildAura(parts)
+				end
+			end
+			if A.Rainbow then
+				local seq = rainbowSequence(os.clock())
+				for _, e in ipairs(auraState.objs) do e.Color = seq end
+			end
+		elseif #auraState.objs > 0 then
+			clearAura()
+		end
+	end
+
+	local function stepGlow(dt)
+		if G.Enabled then
+			glowAcc += dt
+			if glowAcc >= 0.25 or glowState.dirty then
+				glowAcc = 0
+				local wasDirty = glowState.dirty
+				glowState.dirty = false
+				local part = resolveTrailParts(G.Location)[1]
+				if part and (wasDirty or glowState.part ~= part or not glowState.obj or not glowState.obj.Parent) then
+					clearGlow()
+					local l = Instance.new("PointLight")
+					l.Name = "NOTGlow"
+					l.Brightness = G.Brightness
+					l.Range = G.Range
+					l.Color = Color3.fromRGB(G.R, G.G, G.B)
+					l.Parent = part
+					glowState.obj, glowState.part = l, part
+				end
+			end
+			if G.Rainbow and glowState.obj then
+				glowState.obj.Color = rainbowColor(os.clock())
+			end
+		elseif glowState.obj then
+			clearGlow()
+		end
+	end
+
+	local function stepOutline(dt)
+		if O.Enabled then
+			outlineAcc += dt
+			if outlineAcc >= 0.25 or outlineState.dirty then
+				outlineAcc = 0
+				local wasDirty = outlineState.dirty
+				outlineState.dirty = false
+				local model = visibleBodyModel()
+				if model and (wasDirty or outlineState.model ~= model or not outlineState.obj or not outlineState.obj.Parent) then
+					clearOutline()
+					local h = Instance.new("Highlight")
+					h.Name = "NOTOutline"
+					h.Adornee = model
+					h.FillTransparency = O.FillTransparency
+					h.OutlineTransparency = O.OutlineTransparency
+					h.DepthMode = O.AlwaysOnTop and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+					local c = Color3.fromRGB(O.R, O.G, O.B)
+					h.FillColor, h.OutlineColor = c, c
+					h.Parent = workspace.CurrentCamera or workspace
+					outlineState.obj, outlineState.model = h, model
+				end
+			end
+			if O.Rainbow and outlineState.obj then
+				local c = rainbowColor(os.clock())
+				outlineState.obj.FillColor, outlineState.obj.OutlineColor = c, c
+			end
+		elseif outlineState.obj then
+			clearOutline()
+		end
+	end
+
+	local rootAcc = 0
+	local function stepRoots(dt)
+		if not (RT.ClientEnabled or RT.ServerEnabled) then
+			if next(rootBoxes) ~= nil then clearRootBoxes() end
+			return
+		end
+		rootAcc += dt
+		if rootAcc >= 0.25 or rootState.dirty then
+			rootAcc = 0
+			rootState.dirty = false
+			local client, server = findRootParts()
+			ensureRootBox("client", RT.ClientEnabled and client or nil)
+			ensureRootBox("server", RT.ServerEnabled and server or nil)
+		end
+		-- client root: rainbow. server root: inverted rainbow (other direction, opposite hue)
+		local t = os.clock() * RT.Speed
+		local c1 = Color3.fromHSV(t % 1, 1, 1)
+		local c2 = Color3.fromHSV((0.5 - t) % 1, 1, 1)
+		local cb, sb = rootBoxes.client, rootBoxes.server
+		if cb then
+			cb.Color3, cb.SurfaceColor3 = c1, c1
+			cb.LineThickness = RT.Thickness
+			cb.SurfaceTransparency = RT.FillTransparency
+		end
+		if sb then
+			sb.Color3, sb.SurfaceColor3 = c2, c2
+			sb.LineThickness = RT.Thickness
+			sb.SurfaceTransparency = RT.FillTransparency
+		end
+	end
+
+	local function stepGhosts(dt)
 		if D.Enabled then
 			ghostAcc += dt
 			if ghostAcc >= D.Interval then
@@ -1058,13 +2126,57 @@ local function buildConfigUI(UI, MainPage, SaveData, UISound)
 			clearGhosts()
 		end
 	end
-	local warned = false
-	RunService.Heartbeat:Connect(function(dt)
-		local ok, err = pcall(step, dt)
-		if not ok and not warned then
-			warned = true
-			warn("[" .. TITLE .. "] config effects error: " .. tostring(err))
+
+	local function stepHud(dt)
+		if not U.HudEnabled then
+			if hud.gui then clearHud() end
+			return
 		end
+		if not hud.gui then makeHud() end
+		if not hud.label then return end
+		if hud.corner ~= U.HudCorner then
+			hud.corner = U.HudCorner
+			local c = U.HudCorner
+			local ax = (c == "Top Right" or c == "Bottom Right") and 1 or 0
+			local ay = (c == "Bottom Left" or c == "Bottom Right") and 1 or 0
+			local y = 8
+			if ay == 1 then
+				y = -8
+			elseif ax == 0 then
+				y = 56
+			end
+			hud.label.AnchorPoint = Vector2.new(ax, ay)
+			hud.label.Position = UDim2.new(ax, (ax == 1) and -8 or 8, ay, y)
+		end
+		hud.frames += 1
+		hud.acc += dt
+		if hud.acc >= 0.5 then
+			local fps = math.floor(hud.frames / hud.acc + 0.5)
+			hud.frames, hud.acc = 0, 0
+			local ping = "?"
+			pcall(function()
+				ping = tostring(math.floor(StatsService.Network.ServerStatsItem["Data Ping"]:GetValue() + 0.5))
+			end)
+			hud.label.Text = string.format("FPS %d | PING %sms | %s", fps, ping, os.date("%H:%M"))
+		end
+	end
+
+	local warned = {}
+	local function guarded(name, fn, dt)
+		local ok, err = pcall(fn, dt)
+		if not ok and not warned[name] then
+			warned[name] = true
+			warn("[" .. TITLE .. "] " .. name .. " error: " .. tostring(err))
+		end
+	end
+	RunService.Heartbeat:Connect(function(dt)
+		guarded("trail", stepTrail, dt)
+		guarded("aura", stepAura, dt)
+		guarded("glow", stepGlow, dt)
+		guarded("outline", stepOutline, dt)
+		guarded("roots", stepRoots, dt)
+		guarded("ghosts", stepGhosts, dt)
+		guarded("overlay", stepHud, dt)
 	end)
 
 	-- move the "Config" button right under the Store button (found by its text)
@@ -1098,7 +2210,7 @@ _G.NOTCreateConfigUI = function(UI, MainPage, SaveData, UISound)
 end
 
 ----------------------------------------------------------------
--- ASCII background for the main GUI window
+-- Backgrounds inside the main GUI window
 ----------------------------------------------------------------
 local function injectAsciiBackground()
 	local roots = {CoreGui}
@@ -1133,7 +2245,7 @@ local function injectAsciiBackground()
 	if W < 50 then W = 360 end
 	if H < 50 then H = 205 end
 
-	-- logo watermark: the sparkle logo in ascii art
+	-- logo watermark for the plasma: the sparkle logo in ascii art
 	local logo = LOGO_SMALL
 	local logoCols, logoRows = #logo[1], #logo
 
@@ -1162,13 +2274,43 @@ local function injectAsciiBackground()
 		l.ZIndex = z
 		l.Interactable = false
 		l.Text = ""
+		l.Visible = false
 		l.Parent = content
 		return l
 	end
 	local plasma = mkLabel(-2, 0.88)
 	local logoLabel = mkLabel(-1, 0.6)
+	local sceneLabel = mkLabel(-2, BG.cfg.SceneAlpha)
 
-	-- other backgrounds: ascii art from a .txt file, or an image from the backgrounds folder
+	local row0 = math.max(0, math.floor((rows - logoRows) / 2))
+	local col0 = math.max(0, math.floor((cols - logoCols) / 2))
+	local logoLines = table.create(rows)
+	for y = 1, rows do
+		local r = y - 1 - row0
+		if r >= 0 and r < logoRows then
+			logoLines[y] = string.rep(" ", col0) .. logo[r + 1]
+		else
+			logoLines[y] = ""
+		end
+	end
+	logoLabel.Text = table.concat(logoLines, "\n")
+
+	-- keep the plasma out of the logo's shape (plus a 1 cell margin) so the logo stays clean
+	local blank = {}
+	for r = 0, logoRows - 1 do
+		local line = logo[r + 1]
+		for c = 0, logoCols - 1 do
+			if line:sub(c + 1, c + 1) ~= " " then
+				for dy = -1, 1 do
+					for dx = -1, 1 do
+						blank[(row0 + r + 1 + dy) * 256 + (col0 + c + 1 + dx)] = true
+					end
+				end
+			end
+		end
+	end
+
+	-- ascii art from a .txt file
 	local textBg = Instance.new("TextLabel")
 	textBg.BackgroundTransparency = 1
 	textBg.BorderSizePixel = 0
@@ -1189,27 +2331,30 @@ local function injectAsciiBackground()
 	textBg.Parent = content
 
 	-- tiled starburst pattern that slowly drifts diagonally
-	local PATTERN_TILE = 80
 	local patternBg = Instance.new("ImageLabel")
 	patternBg.BackgroundTransparency = 1
 	patternBg.BorderSizePixel = 0
 	patternBg.Position = UDim2.fromOffset(0, 0)
-	patternBg.Size = UDim2.new(1, PATTERN_TILE, 1, PATTERN_TILE)
 	patternBg.ScaleType = Enum.ScaleType.Tile
-	patternBg.TileSize = UDim2.fromOffset(PATTERN_TILE, PATTERN_TILE)
 	patternBg.ImageColor3 = Color3.new(1, 1, 1)
-	patternBg.ImageTransparency = 0.84
 	patternBg.ZIndex = -2
 	patternBg.Interactable = false
 	patternBg.Visible = false
 	patternBg.Parent = content
-	RunService.Heartbeat:Connect(function()
-		if patternBg.Visible and content.Visible then
-			local off = (os.clock() * 10) % PATTERN_TILE
-			patternBg.Position = UDim2.fromOffset(-off, -off)
+	local lastTile = -1
+	local function updatePattern(cfg)
+		local tile = math.max(16, math.floor(cfg.PatternTile))
+		if tile ~= lastTile then
+			lastTile = tile
+			patternBg.Size = UDim2.new(1, tile, 1, tile)
+			patternBg.TileSize = UDim2.fromOffset(tile, tile)
 		end
-	end)
+		patternBg.ImageTransparency = cfg.PatternAlpha
+		local off = (os.clock() * cfg.PatternSpeed) % tile
+		patternBg.Position = UDim2.fromOffset(-off, -off)
+	end
 
+	-- a picture from the backgrounds folder
 	local imageBg = Instance.new("ImageLabel")
 	imageBg.BackgroundTransparency = 1
 	imageBg.BorderSizePixel = 0
@@ -1245,6 +2390,9 @@ local function injectAsciiBackground()
 		textBg.Text = body
 	end
 
+	-- the animated scenes
+	local sceneDef, sceneState, sceneActive = nil, nil, false
+
 	local function applyBackground()
 		local name = BG.current
 		local kind = "pattern"
@@ -1253,11 +2401,15 @@ local function injectAsciiBackground()
 			kind = "none"
 		elseif name == BG_PLASMA then
 			kind = "plasma"
+		elseif SCENES[name] then
+			kind = "scene"
 		elseif name ~= BG_PATTERN then
 			entry = BG.byName[name]
 			if entry then kind = entry.kind end
 		end
 
+		sceneActive = false
+		sceneLabel.Text = ""
 		if kind == "pattern" then
 			local asset = patternAsset()
 			if asset then
@@ -1265,6 +2417,10 @@ local function injectAsciiBackground()
 			else
 				kind = "plasma"
 			end
+		elseif kind == "scene" then
+			sceneDef = SCENES[name]
+			sceneState = sceneDef.new(cols, rows)
+			sceneActive = true
 		elseif kind == "text" then
 			local ok, txt = pcall(readfile, entry.path)
 			if ok and type(txt) == "string" then
@@ -1283,6 +2439,7 @@ local function injectAsciiBackground()
 
 		plasma.Visible = kind == "plasma"
 		logoLabel.Visible = kind == "plasma"
+		sceneLabel.Visible = kind == "scene"
 		textBg.Visible = kind == "text"
 		imageBg.Visible = kind == "image"
 		patternBg.Visible = kind == "pattern"
@@ -1291,39 +2448,11 @@ local function injectAsciiBackground()
 	BG.scan(false)
 	applyBackground()
 
-	local row0 = math.max(0, math.floor((rows - logoRows) / 2))
-	local col0 = math.max(0, math.floor((cols - logoCols) / 2))
-	local logoLines = table.create(rows)
-	for y = 1, rows do
-		local r = y - 1 - row0
-		if r >= 0 and r < logoRows then
-			logoLines[y] = string.rep(" ", col0) .. logo[r + 1]
-		else
-			logoLines[y] = ""
-		end
-	end
-	logoLabel.Text = table.concat(logoLines, "\n")
-
-	-- keep the plasma out of the logo's shape (plus a 1 cell margin) so the logo stays clean
-	local blank = {}
-	for r = 0, logoRows - 1 do
-		local line = logo[r + 1]
-		for c = 0, logoCols - 1 do
-			if line:sub(c + 1, c + 1) ~= " " then
-				for dy = -1, 1 do
-					for dx = -1, 1 do
-						blank[(row0 + r + 1 + dy) * 256 + (col0 + c + 1 + dx)] = true
-					end
-				end
-			end
-		end
-	end
-
-	-- animated ascii plasma
+	-- animation loop + theme colours
 	local RAMP = " .:-=+*#"
 	local nramp = #RAMP
 	local mx, my = cols / 2, rows / 2
-	local acc = 0
+	local plasmaAcc, sceneAcc = 0, 0
 	local ref, refT, mainPage = nil, 0, nil
 	local conn
 	conn = RunService.Heartbeat:Connect(function(dt)
@@ -1331,7 +2460,9 @@ local function injectAsciiBackground()
 			conn:Disconnect()
 			return
 		end
-		-- take the text colour from the UI so light themes get dark ascii instead of white
+
+		-- take the text colour from the UI (light themes get dark ascii instead of white)
+		-- and make only the main page see-through; the other pages stack and must stay solid
 		if not ref then
 			refT += dt
 			if refT > 1 then
@@ -1345,45 +2476,63 @@ local function injectAsciiBackground()
 				end
 			end
 		else
-			plasma.TextColor3 = ref.TextColor3
-			logoLabel.TextColor3 = ref.TextColor3
-			textBg.TextColor3 = ref.TextColor3
-			patternBg.ImageColor3 = ref.TextColor3
+			local c = ref.TextColor3
+			plasma.TextColor3 = c
+			logoLabel.TextColor3 = c
+			sceneLabel.TextColor3 = c
+			textBg.TextColor3 = c
+			patternBg.ImageColor3 = c
 			if mainPage and mainPage.BackgroundTransparency ~= 1 then
 				mainPage.BackgroundTransparency = 1
 			end
 		end
 
-		acc += dt
-		if acc < 1 / 12 then return end
-		acc = 0
 		if not content.Visible then return end
-		if not plasma.Visible then return end
+		local cfg = BG.cfg
 
-		local t = os.clock() * 0.9
-		local lines = table.create(rows)
-		for y = 1, rows do
-			local row = table.create(cols)
-			for x = 1, cols do
-				local ch = " "
-				if not blank[y * 256 + x] then
-					local v = math.sin(x * 0.21 + t)
-						+ math.sin(y * 0.38 - t * 1.3)
-						+ math.sin((x + y) * 0.14 + t * 0.7)
-						+ math.sin(math.sqrt((x - mx) ^ 2 + ((y - my) * 2) ^ 2) * 0.22 - t * 1.1)
-					local idx = math.clamp(math.floor((v + 4) / 8 * nramp) + 1, 1, nramp)
-					ch = RAMP:sub(idx, idx)
-				end
-				row[x] = ch
-			end
-			lines[y] = table.concat(row)
+		if patternBg.Visible then
+			updatePattern(cfg)
 		end
-		plasma.Text = table.concat(lines, "\n")
-		logoLabel.TextTransparency = 0.62 + math.sin(os.clock() * 2) * 0.08
-	end)
 
-	-- Only the main page is made see-through (inside the loop above).
-	-- Every other page stacks on top of the previous one and has to stay solid.
+		if sceneActive then
+			sceneAcc += dt
+			if sceneAcc >= 1 / math.max(1, cfg.SceneFPS) then
+				local elapsed = sceneAcc
+				sceneAcc = 0
+				sceneLabel.TextTransparency = cfg.SceneAlpha
+				local okL, loud = pcall(musicLoudness)
+				local ok, txt = pcall(sceneDef.render, sceneState, os.clock(), elapsed, okL and loud or 0)
+				if ok and type(txt) == "string" then sceneLabel.Text = txt end
+			end
+		end
+
+		if plasma.Visible then
+			plasmaAcc += dt
+			if plasmaAcc >= 1 / 12 then
+				plasmaAcc = 0
+				local t = os.clock() * 0.9
+				local lines = table.create(rows)
+				for y = 1, rows do
+					local row = table.create(cols)
+					for x = 1, cols do
+						local ch = " "
+						if not blank[y * 256 + x] then
+							local v = math.sin(x * 0.21 + t)
+								+ math.sin(y * 0.38 - t * 1.3)
+								+ math.sin((x + y) * 0.14 + t * 0.7)
+								+ math.sin(math.sqrt((x - mx) ^ 2 + ((y - my) * 2) ^ 2) * 0.22 - t * 1.1)
+							local idx = math.clamp(math.floor((v + 4) / 8 * nramp) + 1, 1, nramp)
+							ch = RAMP:sub(idx, idx)
+						end
+						row[x] = ch
+					end
+					lines[y] = table.concat(row)
+				end
+				plasma.Text = table.concat(lines, "\n")
+				logoLabel.TextTransparency = 0.62 + math.sin(os.clock() * 2) * 0.08
+			end
+		end
+	end)
 end
 
 ----------------------------------------------------------------
